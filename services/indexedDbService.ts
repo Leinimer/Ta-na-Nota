@@ -1,0 +1,330 @@
+import { TreeNode, NoteRecord, TagRecord, NoteLinkRecord, AttachmentRecord, AppUser } from '@/types';
+
+const DB_NAME = 'DigitalTactilityDB';
+const DB_VERSION = 1;
+
+let dbPromise: Promise<IDBDatabase> | null = null;
+
+function getDB(): Promise<IDBDatabase> {
+  if (typeof window === 'undefined') {
+    return Promise.reject(new Error('IndexedDB is only available in browser'));
+  }
+
+  if (!dbPromise) {
+    dbPromise = new Promise((resolve, reject) => {
+      const request = indexedDB.open(DB_NAME, DB_VERSION);
+
+      request.onupgradeneeded = (event: IDBVersionChangeEvent) => {
+        const db = (event.target as IDBOpenDBRequest).result;
+
+        // 1. Nodes store
+        if (!db.objectStoreNames.contains('nodes')) {
+          const nodeStore = db.createObjectStore('nodes', { keyPath: 'id' });
+          nodeStore.createIndex('userId', 'userId', { unique: false });
+          nodeStore.createIndex('parentId', 'parentId', { unique: false });
+          nodeStore.createIndex('type', 'type', { unique: false });
+          nodeStore.createIndex('deletedAt', 'deletedAt', { unique: false });
+        }
+
+        // 2. Notes store
+        if (!db.objectStoreNames.contains('notes')) {
+          const noteStore = db.createObjectStore('notes', { keyPath: 'id' });
+          noteStore.createIndex('nodeId', 'nodeId', { unique: true });
+          noteStore.createIndex('userId', 'userId', { unique: false });
+          noteStore.createIndex('isFavorite', 'isFavorite', { unique: false });
+          noteStore.createIndex('lastOpenedAt', 'lastOpenedAt', { unique: false });
+        }
+
+        // 3. Tags store
+        if (!db.objectStoreNames.contains('tags')) {
+          const tagStore = db.createObjectStore('tags', { keyPath: 'id' });
+          tagStore.createIndex('userId', 'userId', { unique: false });
+          tagStore.createIndex('normalizedName', 'normalizedName', { unique: false });
+        }
+
+        // 4. Note Tags junction
+        if (!db.objectStoreNames.contains('note_tags')) {
+          const noteTagStore = db.createObjectStore('note_tags', { keyPath: ['noteId', 'tagId'] });
+          noteTagStore.createIndex('noteId', 'noteId', { unique: false });
+          noteTagStore.createIndex('tagId', 'tagId', { unique: false });
+          noteTagStore.createIndex('userId', 'userId', { unique: false });
+        }
+
+        // 5. Note Links (for internal links and backlinks)
+        if (!db.objectStoreNames.contains('note_links')) {
+          const linkStore = db.createObjectStore('note_links', { keyPath: 'id' });
+          linkStore.createIndex('sourceNoteId', 'sourceNoteId', { unique: false });
+          linkStore.createIndex('targetNoteId', 'targetNoteId', { unique: false });
+          linkStore.createIndex('userId', 'userId', { unique: false });
+        }
+
+        // 6. Attachments store
+        if (!db.objectStoreNames.contains('attachments')) {
+          const attachmentStore = db.createObjectStore('attachments', { keyPath: 'id' });
+          attachmentStore.createIndex('noteId', 'noteId', { unique: false });
+          attachmentStore.createIndex('userId', 'userId', { unique: false });
+        }
+
+        // 7. App State / Local User store
+        if (!db.objectStoreNames.contains('user_session')) {
+          db.createObjectStore('user_session', { keyPath: 'key' });
+        }
+      };
+
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+  }
+
+  return dbPromise;
+}
+
+export const indexedDbService = {
+  // Session
+  async getLocalUser(): Promise<AppUser | null> {
+    const db = await getDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction('user_session', 'readonly');
+      const req = tx.objectStore('user_session').get('currentUser');
+      req.onsuccess = () => resolve(req.result ? req.result.user : null);
+      req.onerror = () => resolve(null);
+    });
+  },
+
+  async setLocalUser(user: AppUser | null): Promise<void> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('user_session', 'readwrite');
+      const store = tx.objectStore('user_session');
+      if (user) {
+        store.put({ key: 'currentUser', user });
+      } else {
+        store.delete('currentUser');
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
+  // Nodes
+  async getAllNodes(userId: string): Promise<TreeNode[]> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('nodes', 'readonly');
+      const req = tx.objectStore('nodes').getAll();
+      req.onsuccess = () => {
+        const list: TreeNode[] = req.result.filter((n: TreeNode) => n.userId === userId && !n.deletedAt);
+        resolve(list.sort((a, b) => a.position - b.position));
+      };
+      req.onerror = () => reject(req.error);
+    });
+  },
+
+  async getNode(id: string): Promise<TreeNode | null> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('nodes', 'readonly');
+      const req = tx.objectStore('nodes').get(id);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  },
+
+  async saveNode(node: TreeNode): Promise<void> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('nodes', 'readwrite');
+      tx.objectStore('nodes').put(node);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
+  async deleteNodeSoft(id: string): Promise<void> {
+    const node = await this.getNode(id);
+    if (node) {
+      node.deletedAt = new Date().toISOString();
+      await this.saveNode(node);
+    }
+  },
+
+  // Notes
+  async getNoteByNodeId(nodeId: string): Promise<NoteRecord | null> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('notes', 'readonly');
+      const index = tx.objectStore('notes').index('nodeId');
+      const req = index.get(nodeId);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  },
+
+  async getNote(id: string): Promise<NoteRecord | null> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('notes', 'readonly');
+      const req = tx.objectStore('notes').get(id);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  },
+
+  async getAllNotes(userId: string): Promise<NoteRecord[]> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('notes', 'readonly');
+      const req = tx.objectStore('notes').getAll();
+      req.onsuccess = () => {
+        const list = req.result.filter((n: NoteRecord) => n.userId === userId);
+        resolve(list);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  },
+
+  async saveNote(note: NoteRecord): Promise<void> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('notes', 'readwrite');
+      tx.objectStore('notes').put(note);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
+  // Tags
+  async getTags(userId: string): Promise<TagRecord[]> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('tags', 'readonly');
+      const req = tx.objectStore('tags').getAll();
+      req.onsuccess = () => {
+        const list = req.result.filter((t: TagRecord) => t.userId === userId);
+        resolve(list);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  },
+
+  async saveTag(tag: TagRecord): Promise<void> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('tags', 'readwrite');
+      tx.objectStore('tags').put(tag);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
+  async getNoteTags(noteId: string): Promise<string[]> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('note_tags', 'readonly');
+      const index = tx.objectStore('note_tags').index('noteId');
+      const req = index.getAll(noteId);
+      req.onsuccess = () => resolve(req.result.map((item: any) => item.tagId));
+      req.onerror = () => reject(req.error);
+    });
+  },
+
+  async setNoteTags(userId: string, noteId: string, tagIds: string[]): Promise<void> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('note_tags', 'readwrite');
+      const store = tx.objectStore('note_tags');
+      const index = store.index('noteId');
+      const req = index.getAll(noteId);
+
+      req.onsuccess = () => {
+        // remove existing
+        for (const item of req.result) {
+          store.delete([item.noteId, item.tagId]);
+        }
+        // add new
+        for (const tagId of tagIds) {
+          store.put({ noteId, tagId, userId, createdAt: new Date().toISOString() });
+        }
+      };
+
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
+  // Note Links (Backlinks)
+  async getNoteLinksForTarget(targetNoteId: string): Promise<NoteLinkRecord[]> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('note_links', 'readonly');
+      const index = tx.objectStore('note_links').index('targetNoteId');
+      const req = index.getAll(targetNoteId);
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+  },
+
+  async setNoteLinks(userId: string, sourceNoteId: string, targetNoteIds: string[]): Promise<void> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('note_links', 'readwrite');
+      const store = tx.objectStore('note_links');
+      const index = store.index('sourceNoteId');
+      const req = index.getAll(sourceNoteId);
+
+      req.onsuccess = () => {
+        // delete old
+        for (const item of req.result) {
+          store.delete(item.id);
+        }
+        // insert new
+        for (const targetId of targetNoteIds) {
+          if (targetId !== sourceNoteId) {
+            store.put({
+              id: `link_${sourceNoteId}_${targetId}`,
+              userId,
+              sourceNoteId,
+              targetNoteId: targetId,
+              createdAt: new Date().toISOString(),
+            });
+          }
+        }
+      };
+
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
+  // Attachments
+  async getAttachments(noteId: string): Promise<AttachmentRecord[]> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('attachments', 'readonly');
+      const index = tx.objectStore('attachments').index('noteId');
+      const req = index.getAll(noteId);
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+  },
+
+  async saveAttachment(attachment: AttachmentRecord): Promise<void> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('attachments', 'readwrite');
+      tx.objectStore('attachments').put(attachment);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
+  async deleteAttachment(id: string): Promise<void> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('attachments', 'readwrite');
+      tx.objectStore('attachments').delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+};

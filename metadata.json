@@ -1,0 +1,6 @@
+{
+  "name": "Digital Tactility — Segundo Cérebro",
+  "description": "Sistema pessoal de organização de conhecimento com árvore hierárquica infinita, editor rico Tiptap, Markdown, tags, backlinks e persistência local e em nuvem.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

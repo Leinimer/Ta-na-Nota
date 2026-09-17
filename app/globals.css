@@ -1,0 +1,273 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --bg-paper: #fbf9f4;
+    --bg-surface-low: #f5f3ee;
+    --bg-surface-high: #eae8e3;
+    --bg-surface-variant: #e4e2dd;
+    --card-paper: #ffffff;
+    --text-primary: #1b1c19;
+    --text-muted: #4e453f;
+    --text-accent: #68594d;
+    --border-paper: #d1c4bc;
+    --border-subtle: #eae8e3;
+    --highlight-folder: #f4dfcb;
+  }
+
+  .dark {
+    --bg-paper: #191816;
+    --bg-surface-low: #201f1c;
+    --bg-surface-high: #2c2a26;
+    --bg-surface-variant: #36342f;
+    --card-paper: #23221e;
+    --text-primary: #f2f1ec;
+    --text-muted: #bbb4aa;
+    --text-accent: #d7c3b4;
+    --border-paper: #44403a;
+    --border-subtle: #2f2d29;
+    --highlight-folder: #3c3328;
+  }
+
+  body {
+    background-color: var(--bg-paper);
+    color: var(--text-primary);
+    font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+}
+
+/* Subtle tactile paper texture */
+.paper-texture {
+  background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noiseFilter'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.65' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noiseFilter)' opacity='0.03'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+}
+
+/* Custom Minimalist Scrollbar */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background-color: rgba(127, 117, 110, 0.25);
+  border-radius: 9999px;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(127, 117, 110, 0.45);
+}
+
+/* Tiptap Editor Typography & Elements */
+.ProseMirror {
+  outline: none !important;
+  min-height: 400px;
+  font-family: 'Source Serif 4', Georgia, serif;
+  font-size: 1.075rem;
+  line-height: 1.75;
+  color: inherit;
+}
+
+.ProseMirror p {
+  margin-top: 0.85em;
+  margin-bottom: 0.85em;
+}
+
+.ProseMirror p.is-editor-empty:first-child::before {
+  color: #a89f91;
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+
+.ProseMirror h1 {
+  font-size: 2.1rem;
+  font-weight: 600;
+  margin-top: 1.4em;
+  margin-bottom: 0.5em;
+  color: var(--text-accent);
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+}
+
+.ProseMirror h2 {
+  font-size: 1.55rem;
+  font-weight: 600;
+  margin-top: 1.25em;
+  margin-bottom: 0.4em;
+  color: var(--text-accent);
+  letter-spacing: -0.01em;
+  line-height: 1.3;
+}
+
+.ProseMirror h3 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-top: 1.1em;
+  margin-bottom: 0.3em;
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
+.ProseMirror h4 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin-top: 0.9em;
+  margin-bottom: 0.2em;
+  color: var(--text-primary);
+}
+
+.ProseMirror blockquote {
+  border-left: 3px solid var(--border-paper);
+  padding-left: 1.25rem;
+  margin-left: 0;
+  margin-right: 0;
+  margin-top: 1.2em;
+  margin-bottom: 1.2em;
+  font-style: italic;
+  color: var(--text-muted);
+}
+
+.ProseMirror ul[data-type="taskList"] {
+  list-style: none;
+  padding: 0;
+  margin: 1em 0;
+}
+
+.ProseMirror ul[data-type="taskList"] li {
+  display: flex;
+  align-items: flex-start;
+  margin-bottom: 0.5em;
+}
+
+.ProseMirror ul[data-type="taskList"] li > label {
+  flex: 0 0 auto;
+  margin-right: 0.65rem;
+  user-select: none;
+  cursor: pointer;
+  margin-top: 0.35rem;
+}
+
+.ProseMirror ul[data-type="taskList"] li > label input[type="checkbox"] {
+  appearance: none;
+  width: 17px;
+  height: 17px;
+  border: 1.5px solid var(--border-paper);
+  border-radius: 50%;
+  outline: none;
+  transition: all 0.15s ease;
+  cursor: pointer;
+  position: relative;
+  background-color: transparent;
+}
+
+.ProseMirror ul[data-type="taskList"] li > label input[type="checkbox"]:checked {
+  background-color: var(--text-accent);
+  border-color: var(--text-accent);
+}
+
+.ProseMirror ul[data-type="taskList"] li > label input[type="checkbox"]:checked::after {
+  content: '';
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #ffffff;
+}
+
+.ProseMirror ul[data-type="taskList"] li[data-checked="true"] > div > p {
+  text-decoration: line-through;
+  color: var(--text-muted);
+}
+
+.ProseMirror ul:not([data-type="taskList"]) {
+  list-style-type: disc;
+  padding-left: 1.5rem;
+  margin: 1em 0;
+}
+
+.ProseMirror ol {
+  list-style-type: decimal;
+  padding-left: 1.5rem;
+  margin: 1em 0;
+}
+
+.ProseMirror pre {
+  background: #252420;
+  color: #f5f2eb;
+  padding: 0.85rem 1.15rem;
+  border-radius: 0.5rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.9rem;
+  overflow-x: auto;
+  margin: 1.25em 0;
+}
+
+.ProseMirror code:not(pre code) {
+  background: rgba(127, 117, 110, 0.15);
+  color: var(--text-accent);
+  padding: 0.15em 0.4em;
+  border-radius: 0.25rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 0.88em;
+}
+
+.ProseMirror hr {
+  border: none;
+  border-top: 1px solid var(--border-paper);
+  margin: 2em 0;
+}
+
+.ProseMirror mark {
+  background-color: #ffe699;
+  color: #1b1c19;
+  padding: 0.1em 0.25em;
+  border-radius: 0.2rem;
+}
+
+.ProseMirror a {
+  color: var(--text-accent);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
+.ProseMirror table {
+  border-collapse: collapse;
+  margin: 1.5em 0;
+  width: 100%;
+  overflow-x: auto;
+  display: block;
+}
+
+.ProseMirror th,
+.ProseMirror td {
+  border: 1px solid var(--border-paper);
+  padding: 0.6rem 0.9rem;
+  text-align: left;
+}
+
+.ProseMirror th {
+  background-color: var(--bg-surface-high);
+  font-weight: 600;
+  color: var(--text-accent);
+}
+
+.ProseMirror img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 0.5rem;
+  margin: 1.5em 0;
+  border: 1px solid var(--border-paper);
+}
+
+.ProseMirror iframe {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: 0.5rem;
+  border: 1px solid var(--border-paper);
+  margin: 1.5em 0;
+}
