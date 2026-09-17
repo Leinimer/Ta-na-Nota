@@ -140,7 +140,7 @@ export function SlashCommandMenu({
         } else {
           const url = prompt('Cole a URL da imagem:');
           if (url) {
-            ed.chain().focus().setImage({ src: url }).run();
+            ed.chain().focus().insertContent({ type: 'image', attrs: { src: url } }).run();
           }
         }
       },

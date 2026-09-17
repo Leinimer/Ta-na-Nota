@@ -5,7 +5,6 @@ import { useEditor, EditorContent } from '@tiptap/react';
 import { StarterKit } from '@tiptap/starter-kit';
 import { Underline } from '@tiptap/extension-underline';
 import { Link } from '@tiptap/extension-link';
-import { Image } from '@tiptap/extension-image';
 import { Youtube } from '@tiptap/extension-youtube';
 import { Table, TableRow, TableCell, TableHeader } from '@tiptap/extension-table';
 import { TaskList } from '@tiptap/extension-task-list';
@@ -20,6 +19,8 @@ import { SlashCommandMenu } from './SlashCommandMenu';
 import { MarkdownService } from '@/services/markdownService';
 import { linkService } from '@/services/linkService';
 import { attachmentService } from '@/services/attachmentService';
+import { DocumentTitle, DocumentTitleContext } from './extensions/DocumentTitle';
+import { ResizableImage } from './extensions/ResizableImage';
 import {
   Star,
   Code2,
@@ -27,8 +28,6 @@ import {
   RefreshCw,
   CheckCircle2,
 } from 'lucide-react';
-
-import { NoteTagsBar } from './NoteTagsBar';
 
 function formatLastModifiedTime(isoDate?: string) {
   if (!isoDate) return '';
@@ -62,26 +61,31 @@ export function NoteEditor({
   onUpdateTitle,
   onSaveContent,
   onToggleFavorite,
-  onDeleteNote,
-  onDuplicateNote,
-  onExportNote,
   onNavigateToNote,
   onTagClick,
 }: NoteEditorProps) {
   const [mode, setMode] = useState<'visual' | 'markdown'>('visual');
-  const [title, setTitle] = useState(node.name);
-  const [prevNodeName, setPrevNodeName] = useState(node.name);
-  if (prevNodeName !== node.name) {
-    setPrevNodeName(node.name);
-    setTitle(node.name);
-  }
+  const titleRef = useRef(node.name || 'Nova nota');
 
-  const [markdownContent, setMarkdownContent] = useState(note.markdownContent || '');
+  // Keep titleRef in sync with node.name if changed externally
+  useEffect(() => {
+    titleRef.current = node.name || 'Nova nota';
+  }, [node.name]);
+
+  // Ensure markdownContent has # Title as the first element
+  const getInitialMarkdown = () => {
+    const raw = note.markdownContent || '';
+    if (/^#\s+/m.test(raw)) {
+      return raw;
+    }
+    return `# ${node.name || 'Nova nota'}\n\n${raw}`.trim();
+  };
+
+  const [markdownContent, setMarkdownContent] = useState(getInitialMarkdown);
   const [backlinks, setBacklinks] = useState<BacklinkItem[]>([]);
-  const [attachments, setAttachments] = useState<AttachmentRecord[]>([]);
-  const [tags, setTags] = useState<string[]>([]);
-  const [newTagInput, setNewTagInput] = useState('');
-  const [isUploading, setIsUploading] = useState(false);
+  const [, setAttachments] = useState<AttachmentRecord[]>([]);
+  const [, setTags] = useState<string[]>([]);
+  const [, setIsUploading] = useState(false);
   const noteImageInputRef = useRef<HTMLInputElement>(null);
 
   // Slash Command state
@@ -90,7 +94,15 @@ export function NoteEditor({
 
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Handle direct image file upload from OS file picker (toolbar / slash command)
+  // Compute initial Tiptap JSON content ensuring DocumentTitle is at index 0
+  const getInitialContent = () => {
+    if (note.editorContent && note.editorContent.content?.[0]?.type === 'documentTitle') {
+      return note.editorContent;
+    }
+    return MarkdownService.markdownToVisual(getInitialMarkdown(), node.name || 'Nova nota');
+  };
+
+  // Handle direct image file upload from OS file picker
   const handleUploadImage = async (file: File) => {
     if (!file) return;
     setIsUploading(true);
@@ -98,7 +110,14 @@ export function NoteEditor({
       const att = await attachmentService.uploadAttachment(node.userId, note.id, file);
       setAttachments((prev) => [...prev, att]);
       if (editor && att.url) {
-        editor.chain().focus().setImage({ src: att.url, alt: file.name }).run();
+        editor.chain().focus().insertContent({
+          type: 'image',
+          attrs: {
+            src: att.url,
+            alt: file.name,
+            width: '100%',
+          },
+        }).run();
       }
     } catch (err) {
       console.warn('Erro ao processar imagem:', err);
@@ -150,9 +169,10 @@ export function NoteEditor({
   const editor = useEditor(
     {
       extensions: [
+        DocumentTitle,
         StarterKit.configure({
           heading: { levels: [1, 2, 3, 4] },
-          codeBlock: false, // will use custom codeblock styling
+          codeBlock: false,
         }),
         Underline,
         Link.configure({
@@ -160,10 +180,7 @@ export function NoteEditor({
           autolink: true,
           linkOnPaste: true,
         }),
-        Image.configure({
-          allowBase64: true,
-          inline: true,
-        }),
+        ResizableImage,
         Youtube.configure({
           controls: true,
           allowFullscreen: true,
@@ -185,14 +202,13 @@ export function NoteEditor({
           placeholder: 'Escreva seus pensamentos ou digite "/" para inserir blocos...',
         }),
       ],
-      content: note.editorContent || MarkdownService.markdownToVisual(note.markdownContent || ''),
+      content: getInitialContent(),
       editorProps: {
         attributes: {
           class: 'focus:outline-none min-h-[450px]',
         },
         handleDOMEvents: {
           keydown: (view, event) => {
-            // Handle slash command
             if (event.key === '/') {
               const { selection } = view.state;
               const coords = view.coordsAtPos(selection.from);
@@ -211,17 +227,22 @@ export function NoteEditor({
         const md = MarkdownService.visualToMarkdown(json);
         setMarkdownContent(md);
         setTags(MarkdownService.extractTags(md));
+
+        // Sync title with documentTitle node (first node)
+        const firstNode = ed.state.doc.firstChild;
+        if (firstNode && firstNode.type.name === 'documentTitle') {
+          const currentText = firstNode.textContent.trim() || 'Nova nota';
+          if (currentText !== titleRef.current) {
+            titleRef.current = currentText;
+            onUpdateTitle(node.id, currentText);
+          }
+        }
+
         triggerSave(md, json);
       },
     },
     [note.id]
   );
-
-  // Handle title changes
-  const handleTitleChange = (newTitle: string) => {
-    setTitle(newTitle);
-    onUpdateTitle(node.id, newTitle);
-  };
 
   // Toggle between Visual and Raw Markdown mode
   const handleToggleMode = (newMode: 'visual' | 'markdown') => {
@@ -235,7 +256,7 @@ export function NoteEditor({
     } else {
       // Switching from markdown to visual
       if (editor) {
-        const json = MarkdownService.markdownToVisual(markdownContent);
+        const json = MarkdownService.markdownToVisual(markdownContent, node.name || 'Nova nota');
         editor.commands.setContent(json);
       }
     }
@@ -246,56 +267,19 @@ export function NoteEditor({
   const handleMarkdownChange = (newMd: string) => {
     setMarkdownContent(newMd);
     setTags(MarkdownService.extractTags(newMd));
-    const json = MarkdownService.markdownToVisual(newMd);
-    triggerSave(newMd, json);
-  };
 
-  // Handle file attachment upload
-  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (!files || files.length === 0) return;
-
-    setIsUploading(true);
-    try {
-      for (let i = 0; i < files.length; i++) {
-        const file = files[i];
-        const att = await attachmentService.uploadAttachment(node.userId, note.id, file);
-        setAttachments((prev) => [...prev, att]);
-
-        // Insert into editor if visual mode
-        if (editor) {
-          if (file.type.startsWith('image/')) {
-            editor.chain().focus().setImage({ src: att.url || '' }).run();
-          } else {
-            // Add reference link in markdown
-            const linkText = `[${file.name}](${att.url})`;
-            editor.chain().focus().insertContent(`\n${linkText}\n`).run();
-          }
-        }
+    // Extract title from first # in markdown mode
+    const titleMatch = newMd.trim().match(/^#\s+(.*)$/m);
+    if (titleMatch && titleMatch[1].trim()) {
+      const extractedTitle = titleMatch[1].trim();
+      if (extractedTitle !== titleRef.current) {
+        titleRef.current = extractedTitle;
+        onUpdateTitle(node.id, extractedTitle);
       }
-    } catch (err) {
-      console.warn('Upload error:', err);
-    } finally {
-      setIsUploading(false);
-      e.target.value = '';
     }
-  };
 
-  // Add tag
-  const handleAddTag = (e: React.FormEvent) => {
-    e.preventDefault();
-    const cleanTag = newTagInput.trim().replace(/^#/, '');
-    if (!cleanTag || tags.includes(cleanTag)) return;
-
-    const updatedTags = [...tags, cleanTag];
-    setTags(updatedTags);
-    const appendedMd = `${markdownContent}\n\n#${cleanTag}`;
-    setMarkdownContent(appendedMd);
-    if (editor) {
-      editor.commands.setContent(MarkdownService.markdownToVisual(appendedMd));
-    }
-    triggerSave(appendedMd, MarkdownService.markdownToVisual(appendedMd));
-    setNewTagInput('');
+    const json = MarkdownService.markdownToVisual(newMd, node.name || 'Nova nota');
+    triggerSave(newMd, json);
   };
 
   // Intercept wiki-link clicks inside the editor
@@ -307,7 +291,6 @@ export function NoteEditor({
         if (href && href.startsWith('note:')) {
           e.preventDefault();
           const noteTitle = decodeURIComponent(href.replace('note:', ''));
-          // Find matching note
           const matchingBl = backlinks.find((b) => b.title.toLowerCase() === noteTitle.toLowerCase());
           if (matchingBl) {
             onNavigateToNote(matchingBl.nodeId);
@@ -323,37 +306,15 @@ export function NoteEditor({
 
   return (
     <div id="note-editor-container" className="flex flex-col flex-1 h-full bg-[#F9F7F2] overflow-hidden">
-      {/* 1. Barra Superior - Compacta, discreta e limpa */}
+      {/* 1. Barra Superior - Nova Organização conforme item 13:
+          LADO ESQUERDO: [ Favorito ] [ Visual ] [ Markdown ]
+          LADO DIREITO: Salvo localmente • 16:22
+      */}
       <div
         id="note-top-bar"
         className="flex items-center justify-between gap-3 px-4 sm:px-6 py-2 border-b border-[#E3DCD2] bg-[#F9F7F2] text-xs select-none"
       >
-        {/* Lado esquerdo: Salvo localmente • Última modificação */}
-        <div className="flex items-center gap-2 text-xs text-[#8C7B6E] truncate">
-          {syncStatus === 'saving' && (
-            <span className="flex items-center gap-1.5 text-[11px] text-amber-700 font-medium">
-              <RefreshCw className="w-3 h-3 animate-spin" /> Salvando...
-            </span>
-          )}
-          {syncStatus === 'saved' && (
-            <span className="flex items-center gap-1.5 text-[11px] text-emerald-700 font-medium">
-              <CheckCircle2 className="w-3.5 h-3.5" /> Salvo localmente
-            </span>
-          )}
-          {syncStatus === 'offline' && (
-            <span className="flex items-center gap-1.5 text-[11px] text-[#8C7B6E]/70 font-medium">
-              ● Offline
-            </span>
-          )}
-
-          {node.updatedAt && (
-            <span className="text-[11px] text-[#8C7B6E]/70 hidden sm:inline">
-              • Última modificação: {formatLastModifiedTime(node.updatedAt)}
-            </span>
-          )}
-        </div>
-
-        {/* Lado direito: Favorito | Visual | Markdown */}
+        {/* LADO ESQUERDO: Favorito | Visual | Markdown */}
         <div className="flex items-center gap-2 shrink-0">
           {/* Botão de Favorito */}
           <button
@@ -367,7 +328,7 @@ export function NoteEditor({
             <Star className={`w-3.5 h-3.5 ${node.isFavorite ? 'fill-amber-500 text-amber-500' : ''}`} />
           </button>
 
-          {/* Alternância Visual e Markdown - Botões pequenos, somente ícones */}
+          {/* Alternância Visual e Markdown - Botões pequenos somente ícones */}
           <div className="flex items-center p-0.5 rounded-md bg-[#E3DCD2] border border-[#D9C5B2]/60">
             <button
               type="button"
@@ -399,6 +360,31 @@ export function NoteEditor({
             </button>
           </div>
         </div>
+
+        {/* LADO DIREITO: Salvo localmente • Última modificação */}
+        <div className="flex items-center gap-2 text-xs text-[#8C7B6E] truncate">
+          {syncStatus === 'saving' && (
+            <span className="flex items-center gap-1.5 text-[11px] text-amber-700 font-medium">
+              <RefreshCw className="w-3 h-3 animate-spin" /> Salvando...
+            </span>
+          )}
+          {syncStatus === 'saved' && (
+            <span className="flex items-center gap-1.5 text-[11px] text-emerald-700 font-medium">
+              <CheckCircle2 className="w-3.5 h-3.5" /> Salvo localmente
+            </span>
+          )}
+          {syncStatus === 'offline' && (
+            <span className="flex items-center gap-1.5 text-[11px] text-[#8C7B6E]/70 font-medium">
+              ● Offline
+            </span>
+          )}
+
+          {node.updatedAt && (
+            <span className="text-[11px] text-[#8C7B6E]/70 hidden sm:inline">
+              • {formatLastModifiedTime(node.updatedAt)}
+            </span>
+          )}
+        </div>
       </div>
 
       {/* 2. Visual Mode Docked Toolbar */}
@@ -418,34 +404,17 @@ export function NoteEditor({
               id="tiptap-editor-wrapper"
               className="w-full max-w-[850px] min-h-[650px] bg-[#FFFFFF] border border-[#E3DCD2] rounded-xl shadow-xs p-6 sm:p-12 relative flex flex-col"
             >
-              {/* Topo da Folha: Título Centralizado e Editável */}
-              <div className="w-full flex flex-col items-center mb-5">
-                <input
-                  id="note-title-page-input"
-                  type="text"
-                  value={title}
-                  onChange={(e) => handleTitleChange(e.target.value)}
-                  placeholder="Sem título"
-                  className="w-full text-center text-3xl sm:text-4xl font-serif font-bold text-[#8C7B6E] bg-transparent outline-none border-b border-transparent hover:border-[#E3DCD2] focus:border-[#8C7B6E] transition-colors py-1 px-2 placeholder:text-[#8C7B6E]/30"
-                />
-
-                {/* Tags diretamente abaixo do título com botão '+' */}
-                <div className="mt-2.5 flex justify-center w-full">
-                  <NoteTagsBar
-                    userId={node.userId}
-                    noteId={note.id}
-                    onTagClick={(tag) => onTagClick && onTagClick(tag.name)}
-                  />
+              <DocumentTitleContext.Provider
+                value={{
+                  userId: node.userId,
+                  noteId: note.id,
+                  onTagClick: (tag) => onTagClick && onTagClick(tag),
+                }}
+              >
+                <div className="flex-1">
+                  <EditorContent editor={editor} />
                 </div>
-
-                {/* Divisor sutil e elegante */}
-                <div className="w-24 h-px bg-[#E3DCD2] mt-4 mb-2" />
-              </div>
-
-              {/* Tiptap Canvas - Conteúdo da Nota começa logo após o divisor */}
-              <div className="flex-1">
-                <EditorContent editor={editor} />
-              </div>
+              </DocumentTitleContext.Provider>
 
               {/* Slash Command Palette Popup */}
               <SlashCommandMenu

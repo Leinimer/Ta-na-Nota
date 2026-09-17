@@ -22,6 +22,8 @@ interface SidebarProps {
   tree: TreeNode[];
   activeNodeId: string | null;
   expandedFolders: Set<string>;
+  editingNodeId?: string | null;
+  onFinishInlineEdit?: () => void;
   tags: TagRecord[];
   currentUser: AppUser | null;
   syncStatus: SyncStatus;
@@ -46,6 +48,8 @@ export function Sidebar({
   tree,
   activeNodeId,
   expandedFolders,
+  editingNodeId,
+  onFinishInlineEdit,
   tags,
   currentUser,
   syncStatus,
@@ -310,6 +314,8 @@ export function Sidebar({
                   level={0}
                   activeNodeId={activeNodeId}
                   expandedFolders={expandedFolders}
+                  editingNodeId={editingNodeId}
+                  onFinishInlineEdit={onFinishInlineEdit}
                   onToggleExpand={onToggleExpand}
                   onSelectNode={(n) => {
                     onSelectNode(n);

@@ -40,6 +40,7 @@ export function AppShell() {
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const [isDraggingSidebar, setIsDraggingSidebar] = useState(false);
+  const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -144,31 +145,28 @@ export function AppShell() {
     });
   };
 
-  // 4. Create Folder
+  // 4. Create Folder - Imediatamente sem pop-up/prompt: cria e ativa edição inline na Sidebar
   const handleCreateFolder = async (parentId?: string | null) => {
     if (!currentUser) return;
-    const name = prompt('Nome da nova pasta:');
-    if (!name || !name.trim()) return;
-
     try {
-      await nodeService.createFolder(currentUser.id, name.trim(), parentId || null);
+      const newFolder = await nodeService.createFolder(currentUser.id, 'Nova pasta', parentId || null);
       if (parentId) {
         setExpandedFolders((prev) => new Set(prev).add(parentId));
       }
       await refreshAppData(currentUser.id);
+      setEditingNodeId(newFolder.id);
     } catch (err) {
       console.warn('Error creating folder:', err);
     }
   };
 
-  // 5. Create Note
+  // 5. Create Note - Imediatamente sem pop-up/prompt: cria e abre na Página da Nota
   const handleCreateNote = async (parentId?: string | null) => {
     if (!currentUser) return;
-    const name = prompt('Título da nova anotação:', 'Sem título');
-    if (name === null) return;
-
     try {
-      const res = await nodeService.createNote(currentUser.id, name.trim(), parentId || null);
+      const defaultTitle = 'Nova nota';
+      const initialMd = `# ${defaultTitle}\n\n`;
+      const res = await nodeService.createNote(currentUser.id, defaultTitle, parentId || null, initialMd);
       if (parentId) {
         setExpandedFolders((prev) => new Set(prev).add(parentId));
       }
@@ -362,6 +360,8 @@ export function AppShell() {
           tree={tree}
           activeNodeId={activeNode?.id || null}
           expandedFolders={expandedFolders}
+          editingNodeId={editingNodeId}
+          onFinishInlineEdit={() => setEditingNodeId(null)}
           tags={tags}
           currentUser={currentUser}
           syncStatus={syncStatus}
@@ -400,6 +400,8 @@ export function AppShell() {
           tree={tree}
           activeNodeId={activeNode?.id || null}
           expandedFolders={expandedFolders}
+          editingNodeId={editingNodeId}
+          onFinishInlineEdit={() => setEditingNodeId(null)}
           tags={tags}
           currentUser={currentUser}
           syncStatus={syncStatus}

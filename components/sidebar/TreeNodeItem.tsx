@@ -23,6 +23,8 @@ interface TreeNodeItemProps {
   level?: number;
   activeNodeId: string | null;
   expandedFolders: Set<string>;
+  editingNodeId?: string | null;
+  onFinishInlineEdit?: () => void;
   onToggleExpand: (folderId: string) => void;
   onSelectNode: (node: TreeNode) => void;
   onCreateChildNote: (parentId: string) => void;
@@ -40,6 +42,8 @@ export function TreeNodeItem({
   level = 0,
   activeNodeId,
   expandedFolders,
+  editingNodeId,
+  onFinishInlineEdit,
   onToggleExpand,
   onSelectNode,
   onCreateChildNote,
@@ -51,17 +55,28 @@ export function TreeNodeItem({
   onExportNote,
   onMoveNode,
 }: TreeNodeItemProps) {
-  const [isEditing, setIsEditing] = useState(false);
+  const [isLocalEditing, setIsLocalEditing] = useState(false);
+  const isEditing = isLocalEditing || editingNodeId === node.id;
   const [editName, setEditName] = useState(node.name);
   const [showMenu, setShowMenu] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+
+  // Sync editName when node.name updates and we are not currently editing
+  const [prevNodeName, setPrevNodeName] = useState(node.name);
+  if (node.name !== prevNodeName) {
+    setPrevNodeName(node.name);
+    if (!isEditing) {
+      setEditName(node.name);
+    }
+  }
 
   const isFolder = node.type === 'folder';
   const isExpanded = expandedFolders.has(node.id);
   const isActive = activeNodeId === node.id;
 
   const handleFinishRename = () => {
-    setIsEditing(false);
+    setIsLocalEditing(false);
+    if (onFinishInlineEdit) onFinishInlineEdit();
     if (editName.trim() && editName.trim() !== node.name) {
       onRenameNode(node.id, editName.trim());
     } else {
@@ -72,7 +87,8 @@ export function TreeNodeItem({
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter') handleFinishRename();
     if (e.key === 'Escape') {
-      setIsEditing(false);
+      setIsLocalEditing(false);
+      if (onFinishInlineEdit) onFinishInlineEdit();
       setEditName(node.name);
     }
   };
@@ -171,6 +187,7 @@ export function TreeNodeItem({
             type="text"
             autoFocus
             value={editName}
+            onFocus={(e) => e.target.select()}
             onClick={(e) => e.stopPropagation()}
             onChange={(e) => setEditName(e.target.value)}
             onBlur={handleFinishRename}
@@ -181,7 +198,7 @@ export function TreeNodeItem({
           <span
             onDoubleClick={(e) => {
               e.stopPropagation();
-              setIsEditing(true);
+              setIsLocalEditing(true);
             }}
             className="flex-1 truncate text-xs sm:text-sm tracking-tight"
           >
@@ -286,7 +303,7 @@ export function TreeNodeItem({
               <button
                 onClick={() => {
                   setShowMenu(false);
-                  setIsEditing(true);
+                  setIsLocalEditing(true);
                 }}
                 className="w-full text-left px-3 py-1.5 hover:bg-[#E3DCD2] flex items-center gap-2 cursor-pointer text-[#3D352E]"
               >
@@ -319,6 +336,8 @@ export function TreeNodeItem({
               level={level + 1}
               activeNodeId={activeNodeId}
               expandedFolders={expandedFolders}
+              editingNodeId={editingNodeId}
+              onFinishInlineEdit={onFinishInlineEdit}
               onToggleExpand={onToggleExpand}
               onSelectNode={onSelectNode}
               onCreateChildNote={onCreateChildNote}

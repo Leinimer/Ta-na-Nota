@@ -27,18 +27,57 @@ export class MarkdownService {
 
   /**
    * Converts generic Markdown string into Tiptap JSON document.
+   * Ensures the very first element is always the documentTitle.
    */
-  static markdownToVisual(markdown: string): any {
+  static markdownToVisual(markdown: string, defaultTitle: string = 'Nova nota'): any {
     if (!markdown || !markdown.trim()) {
       return {
         type: 'doc',
-        content: [{ type: 'paragraph' }],
+        content: [
+          {
+            type: 'documentTitle',
+            content: this.parseInlineText(defaultTitle),
+          },
+          { type: 'paragraph' },
+        ],
       };
     }
 
     const lines = markdown.split('\n');
     const content: any[] = [];
     let i = 0;
+    let hasTitle = false;
+
+    // Check if first non-empty line is # Title
+    while (i < lines.length && !lines[i].trim()) {
+      i++;
+    }
+
+    if (i < lines.length) {
+      const firstLine = lines[i].trim();
+      const titleMatch = firstLine.match(/^#\s+(.*)$/);
+      if (titleMatch) {
+        content.push({
+          type: 'documentTitle',
+          content: this.parseInlineText(titleMatch[1].trim() || defaultTitle),
+        });
+        hasTitle = true;
+        i++;
+      } else {
+        // Did not start with #, add default title as first element
+        content.push({
+          type: 'documentTitle',
+          content: this.parseInlineText(defaultTitle),
+        });
+        hasTitle = true;
+      }
+    } else {
+      content.push({
+        type: 'documentTitle',
+        content: this.parseInlineText(defaultTitle),
+      });
+      hasTitle = true;
+    }
 
     while (i < lines.length) {
       const line = lines[i];
@@ -307,6 +346,11 @@ export class MarkdownService {
     if (!node) return '';
 
     switch (node.type) {
+      case 'documentTitle': {
+        const text = this.renderInlineContent(node.content);
+        return `# ${text || 'Nova nota'}`;
+      }
+
       case 'heading': {
         const level = node.attrs?.level || 1;
         const prefix = '#'.repeat(level);

@@ -167,15 +167,14 @@ export const nodeService = {
       noteId,
     };
 
-    const initialJson = initialMarkdown
-      ? MarkdownService.markdownToVisual(initialMarkdown)
-      : { type: 'doc', content: [{ type: 'paragraph' }] };
+    const finalMarkdown = initialMarkdown || `# ${nodeName}\n\n`;
+    const initialJson = MarkdownService.markdownToVisual(finalMarkdown, nodeName);
 
     const noteRecord = {
       id: noteId,
       nodeId,
       userId,
-      markdownContent: initialMarkdown,
+      markdownContent: finalMarkdown,
       editorContent: initialJson,
       isFavorite: false,
       lastOpenedAt: now,
