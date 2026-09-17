@@ -8,6 +8,8 @@ export interface AppUser {
   id: string;
   email?: string;
   displayName?: string;
+  name?: string;
+  username?: string;
   avatarUrl?: string;
 }
 

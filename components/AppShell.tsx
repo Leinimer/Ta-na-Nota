@@ -11,6 +11,7 @@ import { Sidebar } from './sidebar/Sidebar';
 import { NoteEditor } from './editor/NoteEditor';
 import { CommandPalette } from './command-palette/CommandPalette';
 import { AuthModal } from './auth/AuthModal';
+import { AuthScreen } from './auth/AuthScreen';
 import {
   Menu,
   FilePlus,
@@ -33,6 +34,7 @@ export function AppShell() {
     new Set(['folder-estudos', 'folder-direito', 'folder-constitucional', 'folder-financas'])
   );
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('saved');
+  const [isCheckingAuth, setIsCheckingAuth] = useState(true);
 
   // UI state
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
@@ -123,10 +125,16 @@ export function AppShell() {
 
   useEffect(() => {
     async function initUser() {
-      const user = await authService.getCurrentUser();
-      setCurrentUser(user);
-      if (user) {
-        await refreshAppData(user.id);
+      try {
+        const user = await authService.getCurrentUser();
+        setCurrentUser(user);
+        if (user) {
+          await refreshAppData(user.id);
+        }
+      } catch (err) {
+        console.warn('Erro ao inicializar sessão do usuário:', err);
+      } finally {
+        setIsCheckingAuth(false);
       }
     }
     initUser();
@@ -338,6 +346,30 @@ export function AppShell() {
     }
   };
 
+  // 1. Loading screen while checking existing session
+  if (isCheckingAuth) {
+    return (
+      <div className="flex h-screen w-screen items-center justify-center bg-[#F9F7F2]">
+        <div className="flex flex-col items-center gap-3 text-[#8C7B6E]">
+          <div className="w-8 h-8 border-2 border-[#8C7B6E] border-t-transparent rounded-full animate-spin" />
+          <span className="font-serif text-sm font-medium tracking-wide">Tá na nota</span>
+        </div>
+      </div>
+    );
+  }
+
+  // 2. Authentication Screen when no active session exists
+  if (!currentUser) {
+    return (
+      <AuthScreen
+        onAuthenticated={async (user) => {
+          setCurrentUser(user);
+          await refreshAppData(user.id);
+        }}
+      />
+    );
+  }
+
   return (
     <div
       id="app-shell"
@@ -513,7 +545,14 @@ export function AppShell() {
         currentUser={currentUser}
         onUserChanged={(user) => {
           setCurrentUser(user);
-          if (user) refreshAppData(user.id);
+          if (user) {
+            refreshAppData(user.id);
+          } else {
+            setActiveNode(null);
+            setActiveNote(null);
+            setTree([]);
+            setTags([]);
+          }
         }}
       />
 

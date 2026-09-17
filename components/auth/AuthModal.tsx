@@ -74,20 +74,29 @@ export function AuthModal({ isOpen, onClose, currentUser, onUserChanged }: AuthM
           <X className="w-5 h-5" />
         </button>
 
-        {currentUser && currentUser.id !== 'demo-user-tactility-1' ? (
+        {currentUser ? (
           <div className="space-y-4 text-center">
-            <div className="w-14 h-14 bg-[#D9C5B2] text-[#3D352E] rounded-full mx-auto flex items-center justify-center font-bold text-xl">
-              {currentUser.displayName?.[0]?.toUpperCase() || 'U'}
+            <div className="w-14 h-14 bg-[#D9C5B2] text-[#3D352E] rounded-full mx-auto flex items-center justify-center font-bold text-xl border border-[#8C7B6E]/30">
+              {currentUser.displayName?.[0]?.toUpperCase() || currentUser.name?.[0]?.toUpperCase() || currentUser.username?.[0]?.toUpperCase() || 'U'}
             </div>
-            <h3 className="text-xl font-medium tracking-tight text-[#3D352E]">Sua Conta</h3>
-            <p className="text-sm text-[#8C7B6E]">{currentUser.email}</p>
+            <div>
+              <h3 className="text-lg font-serif font-semibold tracking-tight text-[#3D352E]">
+                {currentUser.displayName || currentUser.name || 'Usuário'}
+              </h3>
+              {currentUser.username && (
+                <p className="text-xs font-mono text-[#8C7B6E] mt-0.5">@{currentUser.username}</p>
+              )}
+              {currentUser.email && (
+                <p className="text-xs text-[#8C7B6E]/80 mt-1">{currentUser.email}</p>
+              )}
+            </div>
             <div className="pt-4 border-t border-[#E3DCD2]">
               <button
                 id="btn-signout"
                 onClick={handleLogout}
-                className="w-full py-2.5 px-4 rounded-lg bg-[#E3DCD2] hover:bg-[#D9C5B2] text-sm font-medium transition-colors cursor-pointer text-[#3D352E]"
+                className="w-full py-2.5 px-4 rounded-lg bg-[#E3DCD2] hover:bg-[#D9C5B2] text-xs font-medium transition-colors cursor-pointer text-[#3D352E]"
               >
-                Encerrar Sessão
+                Encerrar Sessão (Sair)
               </button>
             </div>
           </div>

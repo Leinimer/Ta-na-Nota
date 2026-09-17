@@ -11,6 +11,7 @@ import { TaskList } from '@tiptap/extension-task-list';
 import { TaskItem } from '@tiptap/extension-task-item';
 import { Highlight } from '@tiptap/extension-highlight';
 import { Placeholder } from '@tiptap/extension-placeholder';
+import { Details, DetailsContent, DetailsSummary } from '@tiptap/extension-details';
 
 import { TreeNode, NoteRecord, BacklinkItem, AttachmentRecord, SyncStatus } from '@/types';
 import { EditorToolbar } from './EditorToolbar';
@@ -92,6 +93,14 @@ export function NoteEditor({
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashMenuPosition, setSlashMenuPosition] = useState({ top: 0, left: 0 });
 
+  // Highlight Mode: when active, mouse text selection automatically highlights with active pastel color
+  const [highlightModeColor, setHighlightModeColor] = useState<string | null>(null);
+  const highlightColorRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    highlightColorRef.current = highlightModeColor;
+  }, [highlightModeColor]);
+
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Compute initial Tiptap JSON content ensuring DocumentTitle is at index 0
@@ -102,7 +111,7 @@ export function NoteEditor({
     return MarkdownService.markdownToVisual(getInitialMarkdown(), node.name || 'Nova nota');
   };
 
-  // Handle direct image file upload from OS file picker
+  // Handle direct image file upload from OS file picker (default width: 50%)
   const handleUploadImage = async (file: File) => {
     if (!file) return;
     setIsUploading(true);
@@ -115,7 +124,7 @@ export function NoteEditor({
           attrs: {
             src: att.url,
             alt: file.name,
-            width: '100%',
+            width: '50%',
           },
         }).run();
       }
@@ -198,6 +207,14 @@ export function NoteEditor({
         Highlight.configure({
           multicolor: true,
         }),
+        Details.configure({
+          persist: true,
+          HTMLAttributes: {
+            class: 'details-block my-2 border border-[#E3DCD2] rounded-lg p-2.5 bg-[#FEFDFA]',
+          },
+        }),
+        DetailsSummary,
+        DetailsContent,
         Placeholder.configure({
           placeholder: 'Escreva seus pensamentos ou digite "/" para inserir blocos...',
         }),
@@ -208,7 +225,25 @@ export function NoteEditor({
           class: 'focus:outline-none min-h-[450px]',
         },
         handleDOMEvents: {
+          mouseup: (view) => {
+            if (highlightColorRef.current) {
+              const { selection } = view.state;
+              if (!selection.empty) {
+                const colorToApply = highlightColorRef.current;
+                setTimeout(() => {
+                  if (editor && colorToApply) {
+                    editor.chain().setHighlight({ color: colorToApply }).run();
+                  }
+                }, 10);
+              }
+            }
+            return false;
+          },
           keydown: (view, event) => {
+            if (event.key === 'Escape' && highlightColorRef.current) {
+              setHighlightModeColor(null);
+              return true;
+            }
             if (event.key === '/') {
               const { selection } = view.state;
               const coords = view.coordsAtPos(selection.from);
@@ -392,6 +427,8 @@ export function NoteEditor({
         <EditorToolbar
           editor={editor}
           onUploadImage={handleUploadImage}
+          highlightModeColor={highlightModeColor}
+          onSetHighlightModeColor={setHighlightModeColor}
         />
       )}
 

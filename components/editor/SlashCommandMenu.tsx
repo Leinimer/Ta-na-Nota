@@ -17,6 +17,7 @@ import {
   Sigma,
   Minus,
   Type,
+  ListCollapse,
 } from 'lucide-react';
 
 interface SlashCommandMenuProps {
@@ -74,6 +75,13 @@ export function SlashCommandMenu({
       description: 'Subtítulo pequeno',
       icon: Heading3,
       action: (ed) => ed.chain().focus().toggleHeading({ level: 3 }).run(),
+    },
+    {
+      id: 'toggle-list',
+      title: 'Lista Recolhível / Toggle',
+      description: 'Crie um bloco expansível para ocultar e exibir conteúdo',
+      icon: ListCollapse,
+      action: (ed) => (ed.chain().focus() as any).setDetails().run(),
     },
     {
       id: 'task-list',

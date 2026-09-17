@@ -28,12 +28,15 @@ import {
   Rows,
   Trash2,
   Sigma,
+  ListCollapse,
 } from 'lucide-react';
 
 interface EditorToolbarProps {
   editor: Editor | null;
   onInsertAttachment?: () => void;
   onUploadImage?: (file: File) => Promise<void> | void;
+  highlightModeColor?: string | null;
+  onSetHighlightModeColor?: (color: string | null) => void;
 }
 
 const PASTEL_COLORS = [
@@ -43,14 +46,19 @@ const PASTEL_COLORS = [
   { name: 'Azul pastel', hex: '#C9DDF5' },
 ];
 
-export function EditorToolbar({ editor, onUploadImage }: EditorToolbarProps) {
+export function EditorToolbar({
+  editor,
+  onUploadImage,
+  highlightModeColor,
+  onSetHighlightModeColor,
+}: EditorToolbarProps) {
   const [showTableMenu, setShowTableMenu] = useState(false);
   const [showHighlightMenu, setShowHighlightMenu] = useState(false);
   const [selectedHighlightColor, setSelectedHighlightColor] = useState('#FFF3A6');
   const imageFileInputRef = useRef<HTMLInputElement>(null);
   const highlightMenuRef = useRef<HTMLDivElement>(null);
 
-  // Close highlight dropdown on outside click
+  // Close highlight palette on outside click if not actively in highlight mode
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (highlightMenuRef.current && !highlightMenuRef.current.contains(event.target as Node)) {
@@ -63,7 +71,42 @@ export function EditorToolbar({ editor, onUploadImage }: EditorToolbarProps) {
 
   if (!editor) return null;
 
+  // Toggle highlight mode with default yellow (#FFF3A6)
+  const handleToggleHighlight = () => {
+    if (highlightModeColor) {
+      // Exit highlight mode
+      if (onSetHighlightModeColor) onSetHighlightModeColor(null);
+      setShowHighlightMenu(false);
+    } else {
+      // Enter highlight mode with yellow default
+      const color = selectedHighlightColor || '#FFF3A6';
+      if (onSetHighlightModeColor) onSetHighlightModeColor(color);
+      setShowHighlightMenu(true);
+
+      // If text is already selected, apply immediately
+      if (!editor.state.selection.empty) {
+        editor.chain().focus().setHighlight({ color }).run();
+      }
+    }
+  };
+
+  const handleSelectDotColor = (colorHex: string) => {
+    setSelectedHighlightColor(colorHex);
+    if (onSetHighlightModeColor) onSetHighlightModeColor(colorHex);
+    // If text was selected, apply immediately without losing mode
+    if (!editor.state.selection.empty) {
+      editor.chain().focus().setHighlight({ color: colorHex }).run();
+    }
+  };
+
+  const clearHighlightMode = () => {
+    if (highlightModeColor && onSetHighlightModeColor) {
+      onSetHighlightModeColor(null);
+    }
+  };
+
   const setLink = () => {
+    clearHighlightMode();
     const previousUrl = editor.getAttributes('link').href;
     const url = prompt('Cole o endereço do link ou digite [[Título]] para nota interna:', previousUrl);
     if (url === null) return;
@@ -75,14 +118,15 @@ export function EditorToolbar({ editor, onUploadImage }: EditorToolbarProps) {
   };
 
   const addYoutube = () => {
+    clearHighlightMode();
     const url = prompt('Cole a URL do vídeo do YouTube:');
     if (url) {
       (editor.chain().focus() as any).setYoutubeVideo({ src: url }).run();
     }
   };
 
-  // Abre diretamente o seletor de arquivos do computador (sem pedir URL)
   const addImage = () => {
+    clearHighlightMode();
     imageFileInputRef.current?.click();
   };
 
@@ -92,21 +136,6 @@ export function EditorToolbar({ editor, onUploadImage }: EditorToolbarProps) {
       await onUploadImage(file);
     }
     e.target.value = '';
-  };
-
-  // Toggle highlight with currently selected pastel color (default: #FFF3A6)
-  const applyCurrentHighlight = () => {
-    if (editor.isActive('highlight', { color: selectedHighlightColor })) {
-      editor.chain().focus().unsetHighlight().run();
-    } else {
-      editor.chain().focus().toggleHighlight({ color: selectedHighlightColor }).run();
-    }
-  };
-
-  const selectColorAndApply = (colorHex: string) => {
-    setSelectedHighlightColor(colorHex);
-    setShowHighlightMenu(false);
-    editor.chain().focus().setHighlight({ color: colorHex }).run();
   };
 
   return (
@@ -235,72 +264,73 @@ export function EditorToolbar({ editor, onUploadImage }: EditorToolbarProps) {
         <Strikethrough className="w-3.5 h-3.5" />
       </button>
 
-      {/* 4. Destaque de Texto com 4 Cores Pastel & Amarelo (#FFF3A6) como Padrão */}
+      {/* 4. Destaque de Texto com Paleta Pastel (4 bolinhas, amarelo padrão, modo de seleção contínuo) */}
       <div ref={highlightMenuRef} className="relative inline-flex items-center">
-        <div
-          className={`flex items-center rounded-md transition-colors ${
-            editor.isActive('highlight')
+        <button
+          type="button"
+          id="btn-toolbar-highlight"
+          title={
+            highlightModeColor
+              ? `Modo Marcador ativo. Selecione qualquer trecho com o mouse para destacar. Clique para sair ou pressione Esc.`
+              : 'Destacar texto (Marcador)'
+          }
+          onClick={handleToggleHighlight}
+          className={`p-1.5 rounded-md transition-all cursor-pointer flex items-center gap-1 ${
+            highlightModeColor
+              ? 'bg-[#E3DCD2] text-[#3D352E] ring-2 ring-[#8C7B6E] font-medium shadow-2xs'
+              : editor.isActive('highlight')
               ? 'bg-[#D9C5B2] text-[#3D352E]'
               : 'hover:bg-[#E3DCD2] text-[#8C7B6E]'
           }`}
         >
-          <button
-            type="button"
-            id="btn-toolbar-highlight"
-            title={`Destacar texto (${PASTEL_COLORS.find((c) => c.hex === selectedHighlightColor)?.name || 'Amarelo pastel'})`}
-            onClick={applyCurrentHighlight}
-            className="p-1.5 rounded-l-md transition-colors cursor-pointer flex items-center"
-          >
-            <Highlighter className="w-3.5 h-3.5" />
-            <span
-              className="w-2 h-2 rounded-full ml-1 border border-black/10"
-              style={{ backgroundColor: selectedHighlightColor }}
-            />
-          </button>
-          <button
-            type="button"
-            id="btn-toolbar-highlight-palette"
-            title="Escolher cor de destaque"
-            onClick={() => setShowHighlightMenu((prev) => !prev)}
-            className="p-1 pr-1.5 rounded-r-md hover:bg-black/5 cursor-pointer text-[#8C7B6E]"
-          >
-            <ChevronDown className="w-3 h-3" />
-          </button>
-        </div>
+          <Highlighter className="w-3.5 h-3.5" />
+          <span
+            className="w-2 h-2 rounded-full border border-black/15 shrink-0"
+            style={{ backgroundColor: highlightModeColor || selectedHighlightColor }}
+          />
+        </button>
 
+        {/* Paleta compacta de 4 bolinhas logo abaixo do botão (sem nomes de cores, sem dropdown tradicional) */}
         {showHighlightMenu && (
-          <div className="absolute top-full left-0 mt-1 p-2 bg-[#FEFDFA] border border-[#E3DCD2] rounded-lg shadow-lg z-30 flex flex-col gap-1.5 min-w-[140px]">
-            <div className="text-[10px] uppercase font-semibold text-[#8C7B6E] px-1 pb-1 border-b border-[#E3DCD2]/60">
-              Cores Pastel
-            </div>
-            {PASTEL_COLORS.map((color) => (
-              <button
-                key={color.hex}
-                type="button"
-                onClick={() => selectColorAndApply(color.hex)}
-                className={`flex items-center gap-2 px-2 py-1 rounded text-xs text-[#3D352E] hover:bg-[#F9F7F2] cursor-pointer transition-colors text-left ${
-                  selectedHighlightColor === color.hex ? 'bg-[#E3DCD2]/50 font-medium' : ''
-                }`}
-              >
-                <span
-                  className="w-4 h-4 rounded-full border border-black/10 shrink-0"
+          <div
+            id="highlight-palette-dots"
+            className="absolute top-full left-1/2 -translate-x-1/2 mt-1.5 px-2 py-1.5 bg-[#FEFDFA] border border-[#E3DCD2] rounded-full shadow-lg z-30 flex items-center gap-2 animate-in fade-in zoom-in-95 duration-100"
+          >
+            {PASTEL_COLORS.map((color) => {
+              const isActiveDot = (highlightModeColor || selectedHighlightColor) === color.hex;
+              return (
+                <button
+                  key={color.hex}
+                  type="button"
+                  onMouseDown={(e) => {
+                    // Evita perder foco da seleção no editor
+                    e.preventDefault();
+                    handleSelectDotColor(color.hex);
+                  }}
+                  title={color.name}
+                  aria-label={color.name}
+                  className={`w-4 h-4 rounded-full border border-black/15 cursor-pointer transition-transform hover:scale-125 ${
+                    isActiveDot ? 'ring-2 ring-[#8C7B6E] scale-110' : ''
+                  }`}
                   style={{ backgroundColor: color.hex }}
                 />
-                <span className="truncate">{color.name}</span>
-              </button>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
 
       <div className="w-px h-4 bg-[#E3DCD2] mx-1" />
 
-      {/* 5. Listas e Checklist */}
+      {/* 5. Listas, Checklist & Toggle List */}
       <button
         type="button"
         id="btn-toolbar-checklist"
         title="Checklist / Tarefas"
-        onClick={() => editor.chain().focus().toggleTaskList().run()}
+        onClick={() => {
+          clearHighlightMode();
+          editor.chain().focus().toggleTaskList().run();
+        }}
         className={`p-1.5 rounded-md transition-colors cursor-pointer ${
           editor.isActive('taskList')
             ? 'bg-[#D9C5B2] text-[#3D352E] font-medium'
@@ -313,7 +343,10 @@ export function EditorToolbar({ editor, onUploadImage }: EditorToolbarProps) {
       <button
         type="button"
         title="Lista com Marcadores"
-        onClick={() => editor.chain().focus().toggleBulletList().run()}
+        onClick={() => {
+          clearHighlightMode();
+          editor.chain().focus().toggleBulletList().run();
+        }}
         className={`p-1.5 rounded-md transition-colors cursor-pointer ${
           editor.isActive('bulletList')
             ? 'bg-[#D9C5B2] text-[#3D352E] font-medium'
@@ -326,7 +359,10 @@ export function EditorToolbar({ editor, onUploadImage }: EditorToolbarProps) {
       <button
         type="button"
         title="Lista Numerada"
-        onClick={() => editor.chain().focus().toggleOrderedList().run()}
+        onClick={() => {
+          clearHighlightMode();
+          editor.chain().focus().toggleOrderedList().run();
+        }}
         className={`p-1.5 rounded-md transition-colors cursor-pointer ${
           editor.isActive('orderedList')
             ? 'bg-[#D9C5B2] text-[#3D352E] font-medium'
@@ -334,6 +370,23 @@ export function EditorToolbar({ editor, onUploadImage }: EditorToolbarProps) {
         }`}
       >
         <ListOrdered className="w-3.5 h-3.5" />
+      </button>
+
+      <button
+        type="button"
+        id="btn-toolbar-toggle-list"
+        title="Lista Recolhível (Toggle List)"
+        onClick={() => {
+          clearHighlightMode();
+          (editor.chain().focus() as any).setDetails().run();
+        }}
+        className={`p-1.5 rounded-md transition-colors cursor-pointer ${
+          editor.isActive('details')
+            ? 'bg-[#D9C5B2] text-[#3D352E] font-medium'
+            : 'hover:bg-[#E3DCD2] text-[#8C7B6E]'
+        }`}
+      >
+        <ListCollapse className="w-3.5 h-3.5" />
       </button>
 
       <div className="w-px h-4 bg-[#E3DCD2] mx-1" />

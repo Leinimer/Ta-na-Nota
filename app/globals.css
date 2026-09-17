@@ -289,6 +289,54 @@
   text-decoration: inherit !important;
 }
 
+/* Details / Toggle List styling */
+.ProseMirror details {
+  border: 1px solid #E3DCD2;
+  border-radius: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  margin: 0.75rem 0;
+  background-color: #FEFDFA;
+  transition: all 0.15s ease;
+}
+
+.ProseMirror details summary {
+  cursor: pointer;
+  font-weight: 500;
+  color: #3D352E;
+  outline: none;
+  list-style: none;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  user-select: none;
+}
+
+.ProseMirror details summary::-webkit-details-marker {
+  display: none;
+}
+
+.ProseMirror details summary::before {
+  content: '▶';
+  font-size: 0.7rem;
+  color: #8C7B6E;
+  transition: transform 0.15s ease;
+  display: inline-block;
+}
+
+.ProseMirror details[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.ProseMirror details[open] summary {
+  margin-bottom: 0.5rem;
+  padding-bottom: 0.35rem;
+  border-bottom: 1px dashed #E3DCD2;
+}
+
+.ProseMirror details div[data-type="detailsContent"] {
+  padding-left: 0.85rem;
+}
+
 /* Responsive Table */
 .ProseMirror table {
   border-collapse: collapse;
