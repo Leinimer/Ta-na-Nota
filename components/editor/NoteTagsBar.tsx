@@ -130,14 +130,14 @@ export function NoteTagsBar({
   const attachedTagIds = new Set(noteTags.map((t) => t.id));
 
   return (
-    <div className="relative flex flex-wrap items-center gap-1.5 pt-1">
+    <div className="relative flex flex-wrap items-center justify-center gap-1.5 pt-1">
       {/* 1. Add Tag '+' Button */}
       <div className="relative inline-flex items-center">
         <button
           type="button"
           id="btn-add-note-tag"
           onClick={() => setIsPopoverOpen((prev) => !prev)}
-          className="inline-flex items-center justify-center w-5 h-5 rounded-md bg-[#E3DCD2] border border-[#D9C5B2] text-[#8C7B6E] hover:bg-[#D9C5B2] transition-colors text-xs font-semibold cursor-pointer shadow-2xs"
+          className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-[#E3DCD2] border border-[#D9C5B2] text-[#8C7B6E] hover:bg-[#D9C5B2] transition-colors text-xs font-semibold cursor-pointer shadow-2xs"
           title="Adicionar tag"
           aria-label="Adicionar tag"
         >
@@ -149,7 +149,7 @@ export function NoteTagsBar({
           <div
             ref={popoverRef}
             id="popover-add-tag"
-            className="absolute top-7 left-0 z-50 w-64 bg-[#FEFDFA] border border-[#E3DCD2] rounded-lg shadow-xl p-3 text-xs text-[#3D352E] animate-in fade-in zoom-in-95 duration-150"
+            className="absolute top-7 left-1/2 -translate-x-1/2 sm:left-0 sm:translate-x-0 z-50 w-64 bg-[#FEFDFA] border border-[#E3DCD2] rounded-lg shadow-xl p-3 text-xs text-[#3D352E] animate-in fade-in zoom-in-95 duration-150"
           >
             <div className="flex items-center justify-between pb-2 border-b border-[#E3DCD2] mb-2.5">
               <span className="font-serif font-semibold text-[#8C7B6E]">
@@ -253,15 +253,15 @@ export function NoteTagsBar({
       {noteTags.map((tag) => (
         <div
           key={tag.id}
-          className="group inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-mono bg-[#E3DCD2] text-[#8C7B6E] border border-[#D9C5B2] transition-colors shadow-2xs font-medium"
+          className="group inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-sans bg-[#E3DCD2]/70 text-[#8C7B6E] border border-[#D9C5B2]/50 hover:bg-[#E3DCD2] transition-colors shadow-2xs font-medium"
         >
           <button
             type="button"
             onClick={() => onTagClick && onTagClick(tag)}
             className="hover:underline cursor-pointer"
-            title={`Ver notas com #${tag.name}`}
+            title={`Ver notas com tag ${tag.name}`}
           >
-            #{tag.name}
+            {tag.name}
           </button>
           <button
             type="button"
@@ -269,9 +269,9 @@ export function NoteTagsBar({
               e.stopPropagation();
               handleRemoveTag(tag.id);
             }}
-            className="opacity-60 group-hover:opacity-100 hover:text-red-700 p-0.5 rounded transition-opacity cursor-pointer"
-            title={`Remover #${tag.name} da nota`}
-            aria-label={`Remover #${tag.name}`}
+            className="opacity-50 group-hover:opacity-100 hover:text-red-700 p-0.5 rounded-full transition-opacity cursor-pointer"
+            title={`Remover tag ${tag.name}`}
+            aria-label={`Remover ${tag.name}`}
           >
             <X className="w-2.5 h-2.5" />
           </button>

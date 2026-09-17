@@ -36,9 +36,19 @@ export const attachmentService = {
       }
     }
 
-    // Local fallback object URL or data URL
+    // Fallback local caso Supabase Storage não esteja configurado ou falhe
     if (!fileUrl) {
-      fileUrl = URL.createObjectURL(file);
+      // Para imagens e arquivos em modo local/offline, lê como Data URL para persistir no IndexedDB e recarregar perfeitamente
+      fileUrl = await new Promise<string>((resolve) => {
+        const reader = new FileReader();
+        reader.onloadend = () => resolve(reader.result as string || '');
+        reader.onerror = () => resolve('');
+        reader.readAsDataURL(file);
+      });
+
+      if (!fileUrl) {
+        fileUrl = URL.createObjectURL(file);
+      }
     }
 
     const attachment: AttachmentRecord = {

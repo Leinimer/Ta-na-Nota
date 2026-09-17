@@ -183,7 +183,7 @@
   text-decoration-color: #8C7B6E;
 }
 
-/* Interactive Task List */
+/* Interactive Task List - Circular Checkbox & Aligned Text */
 .ProseMirror ul[data-type="taskList"] {
   list-style: none;
   padding-left: 0;
@@ -193,31 +193,46 @@
 
 .ProseMirror ul[data-type="taskList"] li {
   display: flex;
-  align-items: flex-start;
-  gap: 0.5rem;
+  align-items: center; /* Alinhamento vertical centralizado lado a lado */
+  gap: 0.625rem;
   margin-top: 0.35em;
   margin-bottom: 0.35em;
 }
 
 .ProseMirror ul[data-type="taskList"] li > label {
   user-select: none;
-  margin-top: 0.15em;
   cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  flex-shrink: 0;
 }
 
+/* Bolinha circular ○ */
 .ProseMirror ul[data-type="taskList"] li > label input[type="checkbox"] {
   appearance: none;
-  width: 1.1rem;
-  height: 1.1rem;
-  border: 1.5px solid #8C7B6E;
-  border-radius: 0.25rem;
+  -webkit-appearance: none;
+  width: 1.05rem;
+  height: 1.05rem;
+  border: 1.75px solid #8C7B6E;
+  border-radius: 9999px; /* Círculo perfeito */
   background-color: #FFFFFF;
   cursor: pointer;
   display: grid;
   place-content: center;
   transition: all 0.15s ease;
+  margin: 0;
+  padding: 0;
 }
 
+.ProseMirror ul[data-type="taskList"] li > label input[type="checkbox"]:hover {
+  border-color: #796A5E;
+  background-color: #F9F7F2;
+}
+
+/* Estado marcado: bolinha preenchida ● */
 .ProseMirror ul[data-type="taskList"] li > label input[type="checkbox"]:checked {
   background-color: #8C7B6E;
   border-color: #8C7B6E;
@@ -225,16 +240,30 @@
 
 .ProseMirror ul[data-type="taskList"] li > label input[type="checkbox"]:checked::before {
   content: "";
-  width: 0.55rem;
-  height: 0.35rem;
-  border-left: 2px solid #FFFFFF;
-  border-bottom: 2px solid #FFFFFF;
-  transform: rotate(-45deg) translate(1px, -1px);
+  width: 0.45rem;
+  height: 0.45rem;
+  border-radius: 9999px;
+  background-color: #FFFFFF;
+  display: block;
 }
 
-.ProseMirror ul[data-type="taskList"] li[data-checked="true"] > div {
-  text-decoration: line-through;
-  color: #9E9084;
+/* Texto ao lado do botão: sem quebra vertical */
+.ProseMirror ul[data-type="taskList"] li > div {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+}
+
+.ProseMirror ul[data-type="taskList"] li > div > p {
+  margin: 0 !important;
+  line-height: 1.5;
+}
+
+/* Sem tachado/strike-through quando marcado: o texto permanece normal */
+.ProseMirror ul[data-type="taskList"] li[data-checked="true"] > div,
+.ProseMirror ul[data-type="taskList"] li[data-checked="true"] > div > p {
+  text-decoration: none !important;
+  color: #3D352E !important;
 }
 
 /* Responsive Table */

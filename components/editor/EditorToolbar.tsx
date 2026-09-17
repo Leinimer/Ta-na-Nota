@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import { Editor } from '@tiptap/react';
 import {
   Bold,
@@ -35,10 +35,12 @@ import {
 interface EditorToolbarProps {
   editor: Editor | null;
   onInsertAttachment?: () => void;
+  onUploadImage?: (file: File) => Promise<void> | void;
 }
 
-export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps) {
+export function EditorToolbar({ editor, onInsertAttachment, onUploadImage }: EditorToolbarProps) {
   const [showTableMenu, setShowTableMenu] = useState(false);
+  const imageFileInputRef = useRef<HTMLInputElement>(null);
 
   if (!editor) return null;
 
@@ -60,11 +62,17 @@ export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps
     }
   };
 
+  // Abre diretamente o seletor de arquivos do computador (sem pedir URL)
   const addImage = () => {
-    const url = prompt('Cole a URL da imagem:');
-    if (url) {
-      editor.chain().focus().setImage({ src: url }).run();
+    imageFileInputRef.current?.click();
+  };
+
+  const handleImageFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && onUploadImage) {
+      await onUploadImage(file);
     }
+    e.target.value = '';
   };
 
   return (
@@ -336,14 +344,24 @@ export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps
         <LinkIcon className="w-3.5 h-3.5" />
       </button>
 
+      {/* Inserir Imagem do computador */}
       <button
         type="button"
-        title="Inserir Imagem por URL"
+        id="btn-insert-image"
+        title="Inserir Imagem do Computador"
         onClick={addImage}
         className="p-1.5 rounded-md hover:bg-[#E3DCD2] text-[#8C7B6E] transition-colors cursor-pointer"
+        aria-label="Inserir Imagem do Computador"
       >
         <ImageIcon className="w-3.5 h-3.5" />
       </button>
+      <input
+        ref={imageFileInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp,image/gif,image/svg+xml"
+        className="hidden"
+        onChange={handleImageFileChange}
+      />
 
       <button
         type="button"

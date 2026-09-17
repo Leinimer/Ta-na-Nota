@@ -22,22 +22,10 @@ import { linkService } from '@/services/linkService';
 import { attachmentService } from '@/services/attachmentService';
 import {
   Star,
-  Trash2,
-  Download,
-  Copy,
   Code2,
   Eye,
-  Link2,
-  Paperclip,
-  Plus,
-  FileText,
-  Music,
-  Video,
-  FileDown,
-  X,
   RefreshCw,
   CheckCircle2,
-  Calendar,
 } from 'lucide-react';
 
 import { NoteTagsBar } from './NoteTagsBar';
@@ -94,12 +82,30 @@ export function NoteEditor({
   const [tags, setTags] = useState<string[]>([]);
   const [newTagInput, setNewTagInput] = useState('');
   const [isUploading, setIsUploading] = useState(false);
+  const noteImageInputRef = useRef<HTMLInputElement>(null);
 
   // Slash Command state
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashMenuPosition, setSlashMenuPosition] = useState({ top: 0, left: 0 });
 
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Handle direct image file upload from OS file picker (toolbar / slash command)
+  const handleUploadImage = async (file: File) => {
+    if (!file) return;
+    setIsUploading(true);
+    try {
+      const att = await attachmentService.uploadAttachment(node.userId, note.id, file);
+      setAttachments((prev) => [...prev, att]);
+      if (editor && att.url) {
+        editor.chain().focus().setImage({ src: att.url, alt: file.name }).run();
+      }
+    } catch (err) {
+      console.warn('Erro ao processar imagem:', err);
+    } finally {
+      setIsUploading(false);
+    }
+  };
 
   // Load backlinks & attachments when active note changes
   useEffect(() => {
@@ -155,7 +161,7 @@ export function NoteEditor({
           linkOnPaste: true,
         }),
         Image.configure({
-          allowBase64: false,
+          allowBase64: true,
           inline: true,
         }),
         Youtube.configure({
@@ -317,122 +323,79 @@ export function NoteEditor({
 
   return (
     <div id="note-editor-container" className="flex flex-col flex-1 h-full bg-[#F9F7F2] overflow-hidden">
-      {/* 1. Note Header Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-3 border-b border-[#E3DCD2] bg-[#F9F7F2]">
-        {/* Title Input & Tags */}
-        <div className="flex flex-col flex-1 min-w-[240px] gap-1">
-          <input
-            id="note-title-input"
-            type="text"
-            value={title}
-            onChange={(e) => handleTitleChange(e.target.value)}
-            placeholder="Título da anotação..."
-            className="w-full text-xl sm:text-2xl font-serif font-semibold text-[#8C7B6E] bg-transparent outline-none border-b border-transparent hover:border-[#E3DCD2] focus:border-[#8C7B6E] transition-colors py-0.5 placeholder:text-[#8C7B6E]/50"
-          />
+      {/* 1. Barra Superior - Compacta, discreta e limpa */}
+      <div
+        id="note-top-bar"
+        className="flex items-center justify-between gap-3 px-4 sm:px-6 py-2 border-b border-[#E3DCD2] bg-[#F9F7F2] text-xs select-none"
+      >
+        {/* Lado esquerdo: Salvo localmente • Última modificação */}
+        <div className="flex items-center gap-2 text-xs text-[#8C7B6E] truncate">
+          {syncStatus === 'saving' && (
+            <span className="flex items-center gap-1.5 text-[11px] text-amber-700 font-medium">
+              <RefreshCw className="w-3 h-3 animate-spin" /> Salvando...
+            </span>
+          )}
+          {syncStatus === 'saved' && (
+            <span className="flex items-center gap-1.5 text-[11px] text-emerald-700 font-medium">
+              <CheckCircle2 className="w-3.5 h-3.5" /> Salvo localmente
+            </span>
+          )}
+          {syncStatus === 'offline' && (
+            <span className="flex items-center gap-1.5 text-[11px] text-[#8C7B6E]/70 font-medium">
+              ● Offline
+            </span>
+          )}
 
-          {/* Tags directly below title with + button */}
-          <NoteTagsBar
-            userId={node.userId}
-            noteId={note.id}
-            onTagClick={(tag) => onTagClick && onTagClick(tag.name)}
-          />
+          {node.updatedAt && (
+            <span className="text-[11px] text-[#8C7B6E]/70 hidden sm:inline">
+              • Última modificação: {formatLastModifiedTime(node.updatedAt)}
+            </span>
+          )}
         </div>
 
-        {/* Right side controls: Mode switcher, Save Status, Last Modified, Actions */}
-        <div className="flex flex-wrap items-center gap-2 shrink-0">
-          {/* Mode Switcher: Visual vs Markdown */}
-          <div className="flex items-center p-0.5 rounded-lg bg-[#E3DCD2] border border-[#D9C5B2] text-xs">
+        {/* Lado direito: Favorito | Visual | Markdown */}
+        <div className="flex items-center gap-2 shrink-0">
+          {/* Botão de Favorito */}
+          <button
+            type="button"
+            id="btn-note-favorite"
+            title={node.isFavorite ? 'Remover dos favoritos' : 'Favoritar nota'}
+            onClick={() => onToggleFavorite(node.id)}
+            className="p-1.5 text-[#8C7B6E] hover:text-[#3D352E] rounded-md hover:bg-[#E3DCD2] transition-colors cursor-pointer"
+            aria-label="Favoritar nota"
+          >
+            <Star className={`w-3.5 h-3.5 ${node.isFavorite ? 'fill-amber-500 text-amber-500' : ''}`} />
+          </button>
+
+          {/* Alternância Visual e Markdown - Botões pequenos, somente ícones */}
+          <div className="flex items-center p-0.5 rounded-md bg-[#E3DCD2] border border-[#D9C5B2]/60">
             <button
+              type="button"
               id="btn-mode-visual"
+              title="Modo Visual"
               onClick={() => handleToggleMode('visual')}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
+              className={`p-1 rounded transition-all cursor-pointer ${
                 mode === 'visual'
-                  ? 'bg-[#D9C5B2] text-[#8C7B6E] shadow-2xs'
-                  : 'text-[#8C7B6E]/80 hover:text-[#8C7B6E]'
+                  ? 'bg-[#D9C5B2] text-[#3D352E] shadow-2xs font-semibold'
+                  : 'text-[#8C7B6E]/70 hover:text-[#8C7B6E]'
               }`}
+              aria-label="Visual"
             >
               <Eye className="w-3.5 h-3.5" />
-              <span>Visual</span>
             </button>
             <button
+              type="button"
               id="btn-mode-markdown"
+              title="Modo Markdown"
               onClick={() => handleToggleMode('markdown')}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
+              className={`p-1 rounded transition-all cursor-pointer ${
                 mode === 'markdown'
-                  ? 'bg-[#D9C5B2] text-[#8C7B6E] shadow-2xs'
-                  : 'text-[#8C7B6E]/80 hover:text-[#8C7B6E]'
+                  ? 'bg-[#D9C5B2] text-[#3D352E] shadow-2xs font-semibold'
+                  : 'text-[#8C7B6E]/70 hover:text-[#8C7B6E]'
               }`}
+              aria-label="Markdown"
             >
               <Code2 className="w-3.5 h-3.5" />
-              <span>Markdown</span>
-            </button>
-          </div>
-
-          {/* Save Status & Last Modified Indicator directly beside Visual | Markdown */}
-          <div className="flex items-center gap-2 text-xs text-[#8C7B6E] border-l border-[#E3DCD2] pl-2.5 py-0.5 select-none">
-            {syncStatus === 'saving' && (
-              <span className="flex items-center gap-1 text-[11px] text-amber-700">
-                <RefreshCw className="w-3 h-3 animate-spin" /> Salvando...
-              </span>
-            )}
-            {syncStatus === 'saved' && (
-              <span className="flex items-center gap-1 text-[11px] text-emerald-700">
-                <CheckCircle2 className="w-3 h-3" /> Salvo localmente
-              </span>
-            )}
-            {syncStatus === 'offline' && (
-              <span className="flex items-center gap-1 text-[11px] text-[#8C7B6E]/70">
-                ● Offline
-              </span>
-            )}
-
-            {node.updatedAt && (
-              <span className="text-[11px] text-[#8C7B6E]/70 hidden sm:inline">
-                · Última modificação: {formatLastModifiedTime(node.updatedAt)}
-              </span>
-            )}
-          </div>
-
-          {/* Action buttons */}
-          <div className="flex items-center gap-1 border-l border-[#E3DCD2] pl-2">
-            <button
-              id="btn-note-favorite"
-              title={node.isFavorite ? 'Remover dos favoritos' : 'Favoritar nota'}
-              onClick={() => onToggleFavorite(node.id)}
-              className="p-1.5 text-[#8C7B6E] hover:text-[#3D352E] rounded-lg hover:bg-[#E3DCD2] transition-colors cursor-pointer"
-            >
-              <Star className={`w-4 h-4 ${node.isFavorite ? 'fill-amber-500 text-amber-500' : ''}`} />
-            </button>
-
-            <button
-              id="btn-note-duplicate"
-              title="Duplicar nota"
-              onClick={() => onDuplicateNote(node.id)}
-              className="p-1.5 text-[#8C7B6E] hover:text-[#3D352E] rounded-lg hover:bg-[#E3DCD2] transition-colors cursor-pointer"
-            >
-              <Copy className="w-4 h-4" />
-            </button>
-
-            <button
-              id="btn-note-export-md"
-              title="Exportar Markdown (.md)"
-              onClick={() => onExportNote(node.id)}
-              className="p-1.5 text-[#8C7B6E] hover:text-[#3D352E] rounded-lg hover:bg-[#E3DCD2] transition-colors cursor-pointer"
-            >
-              <Download className="w-4 h-4" />
-            </button>
-
-            <button
-              id="btn-note-delete"
-              title="Excluir nota"
-              onClick={() => {
-                if (confirm(`Deseja mover "${node.name}" para a lixeira?`)) {
-                  onDeleteNote(node.id);
-                }
-              }}
-              className="p-1.5 text-[#8C7B6E] hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors cursor-pointer"
-            >
-              <Trash2 className="w-4 h-4" />
             </button>
           </div>
         </div>
@@ -442,7 +405,7 @@ export function NoteEditor({
       {mode === 'visual' && (
         <EditorToolbar
           editor={editor}
-          onInsertAttachment={() => document.getElementById('file-upload-input')?.click()}
+          onUploadImage={handleUploadImage}
         />
       )}
 
@@ -450,13 +413,39 @@ export function NoteEditor({
       <div className="flex-1 overflow-y-auto custom-scrollbar">
         {mode === 'visual' ? (
           <div className="p-4 sm:p-8 flex justify-center">
-            {/* Paper Sheet Container */}
+            {/* Paper Sheet Container (Página da Nota) */}
             <div
               id="tiptap-editor-wrapper"
-              className="w-full max-w-[850px] min-h-[600px] bg-[#FFFFFF] border border-[#E3DCD2] rounded-xl shadow-xs p-6 sm:p-12 relative"
+              className="w-full max-w-[850px] min-h-[650px] bg-[#FFFFFF] border border-[#E3DCD2] rounded-xl shadow-xs p-6 sm:p-12 relative flex flex-col"
             >
-              {/* Tiptap Canvas */}
-              <EditorContent editor={editor} />
+              {/* Topo da Folha: Título Centralizado e Editável */}
+              <div className="w-full flex flex-col items-center mb-5">
+                <input
+                  id="note-title-page-input"
+                  type="text"
+                  value={title}
+                  onChange={(e) => handleTitleChange(e.target.value)}
+                  placeholder="Sem título"
+                  className="w-full text-center text-3xl sm:text-4xl font-serif font-bold text-[#8C7B6E] bg-transparent outline-none border-b border-transparent hover:border-[#E3DCD2] focus:border-[#8C7B6E] transition-colors py-1 px-2 placeholder:text-[#8C7B6E]/30"
+                />
+
+                {/* Tags diretamente abaixo do título com botão '+' */}
+                <div className="mt-2.5 flex justify-center w-full">
+                  <NoteTagsBar
+                    userId={node.userId}
+                    noteId={note.id}
+                    onTagClick={(tag) => onTagClick && onTagClick(tag.name)}
+                  />
+                </div>
+
+                {/* Divisor sutil e elegante */}
+                <div className="w-24 h-px bg-[#E3DCD2] mt-4 mb-2" />
+              </div>
+
+              {/* Tiptap Canvas - Conteúdo da Nota começa logo após o divisor */}
+              <div className="flex-1">
+                <EditorContent editor={editor} />
+              </div>
 
               {/* Slash Command Palette Popup */}
               <SlashCommandMenu
@@ -464,110 +453,8 @@ export function NoteEditor({
                 isOpen={slashMenuOpen}
                 onClose={() => setSlashMenuOpen(false)}
                 position={slashMenuPosition}
+                onTriggerImageUpload={() => noteImageInputRef.current?.click()}
               />
-
-              {/* Attachments Section */}
-              <div className="mt-12 pt-6 border-t border-[#E3DCD2]">
-                <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-semibold tracking-wider text-[#8C7B6E] uppercase flex items-center gap-1.5">
-                    <Paperclip className="w-3.5 h-3.5 text-[#8C7B6E]" /> Anexos e Mídia ({attachments.length})
-                  </span>
-                  <label
-                    htmlFor="file-upload-input"
-                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md bg-[#E3DCD2] hover:bg-[#D9C5B2] text-[#8C7B6E] cursor-pointer transition-colors font-medium"
-                  >
-                    <Plus className="w-3.5 h-3.5" />
-                    {isUploading ? 'Enviando...' : 'Adicionar Anexo'}
-                  </label>
-                  <input
-                    id="file-upload-input"
-                    type="file"
-                    multiple
-                    onChange={handleFileUpload}
-                    className="hidden"
-                  />
-                </div>
-
-                {attachments.length > 0 && (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 mt-2">
-                    {attachments.map((att) => {
-                      const isImage = att.mimeType.startsWith('image/');
-                      const isAudio = att.mimeType.startsWith('audio/');
-                      const isVideo = att.mimeType.startsWith('video/');
-                      const isPdf = att.mimeType.includes('pdf');
-
-                      return (
-                        <div
-                          key={att.id}
-                          className="p-3 bg-[#F9F7F2] border border-[#E3DCD2] rounded-lg text-xs flex flex-col gap-2 text-[#3D352E]"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <div className="flex items-center gap-2 truncate">
-                              {isAudio && <Music className="w-4 h-4 text-[#8C7B6E] shrink-0" />}
-                              {isVideo && <Video className="w-4 h-4 text-[#8C7B6E] shrink-0" />}
-                              {isPdf && <FileText className="w-4 h-4 text-red-600 shrink-0" />}
-                              {!isAudio && !isVideo && !isPdf && <Paperclip className="w-4 h-4 text-[#8C7B6E] shrink-0" />}
-                              <span className="font-medium truncate">{att.fileName}</span>
-                            </div>
-                            <span className="text-[10px] text-[#8C7B6E]/70 shrink-0">
-                              {(att.fileSize / 1024).toFixed(1)} KB
-                            </span>
-                          </div>
-
-                          {/* Media Player Renders */}
-                          {isAudio && att.url && (
-                            <audio controls src={att.url} className="w-full h-8 mt-1" />
-                          )}
-                          {isVideo && att.url && (
-                            <video controls src={att.url} className="w-full max-h-48 rounded-md mt-1" />
-                          )}
-                          {isPdf && att.url && (
-                            <a
-                              href={att.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="inline-flex items-center gap-1 text-[11px] text-[#8C7B6E] hover:underline"
-                            >
-                              <FileDown className="w-3.5 h-3.5" /> Abrir / Baixar Documento PDF
-                            </a>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                )}
-              </div>
-
-              {/* Backlinks / "Referenciado por" Section */}
-              <div className="mt-8 pt-6 border-t border-[#E3DCD2]">
-                <div className="text-xs font-semibold tracking-wider text-[#8C7B6E] uppercase mb-2 flex items-center gap-1.5">
-                  <Link2 className="w-3.5 h-3.5 text-[#8C7B6E]" /> Referenciado Por / Backlinks ({backlinks.length})
-                </div>
-                {backlinks.length === 0 ? (
-                  <p className="text-xs text-[#8C7B6E]/70 italic">
-                    Nenhuma outra nota faz referência a esta no momento. Use [[{node.name}]] em qualquer outra nota para criar uma conexão bilateral.
-                  </p>
-                ) : (
-                  <div className="space-y-1.5 mt-2">
-                    {backlinks.map((bl) => (
-                      <div
-                        key={bl.noteId}
-                        onClick={() => onNavigateToNote(bl.nodeId)}
-                        className="p-2.5 rounded-lg border border-[#E3DCD2] hover:border-[#8C7B6E] bg-[#F9F7F2] hover:bg-[#E3DCD2]/40 transition-colors cursor-pointer"
-                      >
-                        <div className="font-medium text-xs text-[#8C7B6E]">
-                          {bl.title}
-                        </div>
-                        {bl.snippet && (
-                          <div className="text-[11px] text-[#7A6B5F] mt-0.5 truncate font-serif italic">
-                            &ldquo;{bl.snippet}&rdquo;
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
             </div>
           </div>
         ) : (
@@ -577,6 +464,21 @@ export function NoteEditor({
           />
         )}
       </div>
+
+      {/* Hidden input para seleção e upload de imagem via explorador do SO */}
+      <input
+        ref={noteImageInputRef}
+        type="file"
+        accept="image/jpeg,image/png,image/webp,image/gif,image/svg+xml"
+        className="hidden"
+        onChange={async (e) => {
+          const file = e.target.files?.[0];
+          if (file) {
+            await handleUploadImage(file);
+          }
+          e.target.value = '';
+        }}
+      />
     </div>
   );
 }

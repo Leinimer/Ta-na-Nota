@@ -24,6 +24,7 @@ interface SlashCommandMenuProps {
   isOpen: boolean;
   onClose: () => void;
   position: { top: number; left: number };
+  onTriggerImageUpload?: () => void;
 }
 
 interface CommandItem {
@@ -34,7 +35,13 @@ interface CommandItem {
   action: (editor: Editor) => void;
 }
 
-export function SlashCommandMenu({ editor, isOpen, onClose, position }: SlashCommandMenuProps) {
+export function SlashCommandMenu({
+  editor,
+  isOpen,
+  onClose,
+  position,
+  onTriggerImageUpload,
+}: SlashCommandMenuProps) {
   const [query, setQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -124,13 +131,17 @@ export function SlashCommandMenu({ editor, isOpen, onClose, position }: SlashCom
     },
     {
       id: 'image',
-      title: 'Imagem por URL',
-      description: 'Insira imagem a partir de um link',
+      title: 'Inserir Imagem',
+      description: 'Insira uma imagem do computador',
       icon: ImageIcon,
       action: (ed) => {
-        const url = prompt('Cole a URL da imagem:');
-        if (url) {
-          ed.chain().focus().setImage({ src: url }).run();
+        if (onTriggerImageUpload) {
+          onTriggerImageUpload();
+        } else {
+          const url = prompt('Cole a URL da imagem:');
+          if (url) {
+            ed.chain().focus().setImage({ src: url }).run();
+          }
         }
       },
     },
