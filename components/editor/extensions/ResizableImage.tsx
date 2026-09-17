@@ -2,12 +2,35 @@
 
 import { Node, mergeAttributes } from '@tiptap/core';
 import { ReactNodeViewRenderer, NodeViewWrapper, NodeViewProps } from '@tiptap/react';
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { GripVertical } from 'lucide-react';
+import { attachmentService } from '@/services/attachmentService';
 
 function ResizableImageView({ node, updateAttributes, selected }: NodeViewProps) {
   const [resizing, setResizing] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  // Inicializa displaySrc se já for data:/blob:/http, caso contrário resolve assincronamente
+  const initialSrc = node.attrs.src || '';
+  const isDirectUrl = initialSrc.startsWith('data:') || initialSrc.startsWith('blob:') || initialSrc.startsWith('http');
+  const [displaySrc, setDisplaySrc] = useState<string>(isDirectUrl ? initialSrc : '');
+  const [isLoading, setIsLoading] = useState<boolean>(!isDirectUrl && Boolean(initialSrc));
+
+  useEffect(() => {
+    let isMounted = true;
+    if (!node.attrs.src) return;
+
+    attachmentService.resolveImageUrl(node.attrs.src).then((resolved) => {
+      if (isMounted) {
+        setDisplaySrc(resolved);
+        setIsLoading(false);
+      }
+    });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [node.attrs.src]);
 
   // Default initial width is 50%
   const currentWidth = node.attrs.width || '50%';
@@ -66,11 +89,17 @@ function ResizableImageView({ node, updateAttributes, selected }: NodeViewProps)
           <GripVertical className="w-3.5 h-3.5" />
         </div>
 
-        <img
-          src={node.attrs.src}
-          alt={node.attrs.alt || ''}
-          className="w-full h-auto rounded-lg object-contain block pointer-events-none"
-        />
+        {displaySrc ? (
+          <img
+            src={displaySrc}
+            alt={node.attrs.alt || ''}
+            className="w-full h-auto rounded-lg object-contain block pointer-events-none"
+          />
+        ) : (
+          <div className="w-full min-h-[140px] bg-[#E3DCD2]/40 rounded-lg flex items-center justify-center text-xs text-[#8C7B6E] p-4">
+            {isLoading ? 'Carregando imagem...' : 'Imagem indisponível'}
+          </div>
+        )}
 
         {/* Word-style corner resize handles (Southeast & Southwest) */}
         <div

@@ -153,13 +153,14 @@ export const authService = {
             // 2. Try profiles table lookup
             const { data: profile } = await supabase
               .from('profiles')
-              .select('id, username')
+              .select('id, username, email')
               .eq('username', usernameClean)
               .maybeSingle();
 
-            if (!profile) {
+            if (!profile || !profile.email) {
               return { user: null, error: 'Usuário com este login não foi encontrado.' };
             }
+            targetEmail = profile.email;
           }
         } catch {
           // If RPC not available and direct query fails

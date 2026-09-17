@@ -327,4 +327,26 @@ export const indexedDbService = {
       tx.onerror = () => reject(tx.error);
     });
   },
+
+  async getAttachmentByStoragePath(storagePath: string): Promise<AttachmentRecord | null> {
+    const db = await getDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction('attachments', 'readonly');
+      const store = tx.objectStore('attachments');
+      const req = store.openCursor();
+      req.onsuccess = (e) => {
+        const cursor = (e.target as IDBRequest).result as IDBCursorWithValue;
+        if (cursor) {
+          if (cursor.value.storagePath === storagePath) {
+            resolve(cursor.value);
+            return;
+          }
+          cursor.continue();
+        } else {
+          resolve(null);
+        }
+      };
+      req.onerror = () => resolve(null);
+    });
+  },
 };
