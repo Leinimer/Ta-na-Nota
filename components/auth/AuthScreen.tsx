@@ -1,9 +1,9 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { authService } from '@/services/authService';
 import { AppUser } from '@/types';
-import { Eye, EyeOff, AlertCircle, Loader2 } from 'lucide-react';
+import { Eye, EyeOff, AlertCircle, Loader2, CheckCircle2 } from 'lucide-react';
 
 interface AuthScreenProps {
   onAuthenticated: (user: AppUser) => void;
@@ -24,13 +24,92 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
   const [signupPassword, setSignupPassword] = useState('');
   const [signupConfirmPassword, setSignupConfirmPassword] = useState('');
 
+  // Username validation state
+  const [isCheckingUsername, setIsCheckingUsername] = useState(false);
+  const [usernameStatus, setUsernameStatus] = useState<'available' | 'unavailable' | null>(null);
+  const [usernameMessage, setUsernameMessage] = useState<string | null>(null);
+
   // UI state
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [googleLoading, setGoogleLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const resetErrors = () => setErrorMessage(null);
+  const resetErrors = () => {
+    setErrorMessage(null);
+  };
+
+  const handleSwitchTab = (newMode: 'login' | 'signup') => {
+    setMode(newMode);
+    resetErrors();
+    setLoading(false);
+    setGoogleLoading(false);
+    setIsCheckingUsername(false);
+  };
+
+  // Validação derivada síncrona do nome de usuário
+  const cleanSignupUsername = signupUsername.trim().toLowerCase();
+  const isUsernameEmpty = cleanSignupUsername.length === 0;
+  const hasInvalidUsernameChars = !isUsernameEmpty && !/^[a-zA-Z0-9_.]+$/.test(cleanSignupUsername);
+  const isUsernameTooShort = !isUsernameEmpty && !hasInvalidUsernameChars && cleanSignupUsername.length < 3;
+  const isUsernameSyntaxValid = !isUsernameEmpty && !hasInvalidUsernameChars && !isUsernameTooShort;
+
+  // Debounced username availability validation via RPC
+  useEffect(() => {
+    const trimmed = signupUsername.trim().toLowerCase();
+    if (!trimmed || !/^[a-zA-Z0-9_.]+$/.test(trimmed) || trimmed.length < 3) {
+      return;
+    }
+
+    let isMounted = true;
+    const timer = setTimeout(async () => {
+      if (!isMounted) return;
+      setIsCheckingUsername(true);
+      try {
+        const check = await authService.isUsernameAvailable(trimmed);
+        if (!isMounted) return;
+        if (check.available) {
+          setUsernameStatus('available');
+          setUsernameMessage('Login disponível');
+        } else {
+          setUsernameStatus('unavailable');
+          setUsernameMessage(check.error || 'Este usuário já está em uso.');
+        }
+      } catch (err) {
+        console.warn('Falha na checagem de username:', err);
+        if (isMounted) {
+          setUsernameStatus('available');
+          setUsernameMessage(null);
+        }
+      } finally {
+        if (isMounted) {
+          setIsCheckingUsername(false);
+        }
+      }
+    }, 400);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [signupUsername]);
+
+  // Validações do formulário de cadastro
+  const isNameValid = signupName.trim().length > 0;
+  const isUsernameReady =
+    isUsernameSyntaxValid &&
+    usernameStatus !== 'unavailable' &&
+    !isCheckingUsername;
+  const isEmailValid = signupEmail.trim().length > 0 && signupEmail.includes('@');
+  const isPasswordValid = signupPassword.length >= 6;
+  const doPasswordsMatch = signupPassword.length >= 6 && signupPassword === signupConfirmPassword;
+
+  const isSignupFormValid =
+    isNameValid &&
+    isUsernameReady &&
+    isEmailValid &&
+    isPasswordValid &&
+    doPasswordsMatch;
 
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -83,7 +162,6 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
       return;
     }
 
-    // Regras do login: letras, números, ponto ou sublinhado
     if (!/^[a-zA-Z0-9_.]+$/.test(cleanUsername)) {
       setErrorMessage('O login deve conter apenas letras, números, ponto ou sublinhado, sem espaços.');
       return;
@@ -104,7 +182,6 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
       return;
     }
 
-    // Regra da confirmação de senha
     if (signupPassword !== signupConfirmPassword) {
       setErrorMessage('Os campos de senha não são iguais.');
       return;
@@ -140,6 +217,11 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
       if (res.error) {
         setErrorMessage(res.error);
         setGoogleLoading(false);
+      } else {
+        // Redirecionamento OAuth: se não redirecionar imediatamente (ex: iframe sandbox), libera o estado
+        setTimeout(() => {
+          setGoogleLoading(false);
+        }, 3500);
       }
     } catch (err: any) {
       setErrorMessage(err?.message || 'Erro ao conectar com Google.');
@@ -171,10 +253,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
           <button
             type="button"
             id="tab-login"
-            onClick={() => {
-              setMode('login');
-              resetErrors();
-            }}
+            onClick={() => handleSwitchTab('login')}
             className={`flex-1 py-2 rounded-lg text-xs font-semibold tracking-wide transition-all cursor-pointer ${
               mode === 'login'
                 ? 'bg-[#FEFDFA] text-[#8C7B6E] shadow-2xs border border-[#E3DCD2]'
@@ -186,10 +265,7 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
           <button
             type="button"
             id="tab-signup"
-            onClick={() => {
-              setMode('signup');
-              resetErrors();
-            }}
+            onClick={() => handleSwitchTab('signup')}
             className={`flex-1 py-2 rounded-lg text-xs font-semibold tracking-wide transition-all cursor-pointer ${
               mode === 'signup'
                 ? 'bg-[#FEFDFA] text-[#8C7B6E] shadow-2xs border border-[#E3DCD2]'
@@ -282,8 +358,8 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
               <button
                 type="submit"
                 id="btn-login-submit"
-                disabled={loading || googleLoading}
-                className="w-full py-2.5 px-4 rounded-lg bg-[#8C7B6E] hover:bg-[#7b6a5d] text-[#F9F7F2] font-medium text-sm transition-colors cursor-pointer flex items-center justify-center gap-2 shadow-sm disabled:opacity-60"
+                disabled={loading}
+                className="w-full py-2.5 px-4 rounded-lg bg-[#8C7B6E] hover:bg-[#7b6a5d] text-[#F9F7F2] font-medium text-sm transition-colors cursor-pointer flex items-center justify-center gap-2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {loading && <Loader2 className="w-4 h-4 animate-spin" />}
                 <span>Entrar</span>
@@ -326,14 +402,61 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
                     type="text"
                     required
                     value={signupUsername}
-                    onChange={(e) => setSignupUsername(e.target.value.replace(/\s+/g, ''))}
+                    onChange={(e) => {
+                      setSignupUsername(e.target.value.replace(/\s+/g, ''));
+                      setUsernameStatus(null);
+                      setUsernameMessage(null);
+                    }}
                     placeholder="seu_username"
-                    className="w-full pl-8 pr-3.5 py-2 text-sm bg-[#FFFFFF] border border-[#E3DCD2] rounded-lg text-[#3D352E] font-mono placeholder:font-sans placeholder:text-[#8C7B6E]/50 focus:outline-none focus:border-[#8C7B6E] focus:ring-1 focus:ring-[#8C7B6E] transition-all"
+                    className="w-full pl-8 pr-9 py-2 text-sm bg-[#FFFFFF] border border-[#E3DCD2] rounded-lg text-[#3D352E] font-mono placeholder:font-sans placeholder:text-[#8C7B6E]/50 focus:outline-none focus:border-[#8C7B6E] focus:ring-1 focus:ring-[#8C7B6E] transition-all"
                   />
+                  {/* Status Indicator Icon */}
+                  <div className="absolute right-3 flex items-center pointer-events-none">
+                    {isCheckingUsername && (
+                      <Loader2 className="w-4 h-4 text-[#8C7B6E] animate-spin" />
+                    )}
+                    {!isCheckingUsername && usernameStatus === 'available' && !hasInvalidUsernameChars && !isUsernameTooShort && (
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                    )}
+                    {!isCheckingUsername && (usernameStatus === 'unavailable' || hasInvalidUsernameChars || isUsernameTooShort) && (
+                      <AlertCircle className="w-4 h-4 text-red-500" />
+                    )}
+                  </div>
                 </div>
-                <span className="text-[10px] text-[#8C7B6E]/70 block mt-0.5">
-                  Apenas letras, números, ponto ou sublinhado
-                </span>
+
+                {/* Feedback de disponibilidade e formato */}
+                <div className="mt-1 min-h-4">
+                  {isCheckingUsername && (
+                    <span className="text-[11px] text-[#8C7B6E] flex items-center gap-1">
+                      Verificando disponibilidade...
+                    </span>
+                  )}
+                  {!isCheckingUsername && hasInvalidUsernameChars && (
+                    <span className="text-[11px] text-red-600">
+                      O login deve conter apenas letras, números, ponto ou sublinhado.
+                    </span>
+                  )}
+                  {!isCheckingUsername && !hasInvalidUsernameChars && isUsernameTooShort && (
+                    <span className="text-[11px] text-red-600">
+                      O login deve ter no mínimo 3 caracteres.
+                    </span>
+                  )}
+                  {!isCheckingUsername && usernameStatus === 'unavailable' && (
+                    <span className="text-[11px] text-red-600 font-medium">
+                      {usernameMessage || 'Este usuário já está em uso.'}
+                    </span>
+                  )}
+                  {!isCheckingUsername && usernameStatus === 'available' && !hasInvalidUsernameChars && !isUsernameTooShort && (
+                    <span className="text-[11px] text-emerald-700 font-medium">
+                      ✓ Login disponível
+                    </span>
+                  )}
+                  {!isCheckingUsername && isUsernameEmpty && (
+                    <span className="text-[10px] text-[#8C7B6E]/70 block">
+                      Apenas letras, números, ponto ou sublinhado (mínimo 3 caracteres)
+                    </span>
+                  )}
+                </div>
               </div>
 
               <div>
@@ -388,14 +511,19 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
                   placeholder="Repita a senha"
                   className="w-full px-3.5 py-2 text-sm bg-[#FFFFFF] border border-[#E3DCD2] rounded-lg text-[#3D352E] placeholder:text-[#8C7B6E]/50 focus:outline-none focus:border-[#8C7B6E] focus:ring-1 focus:ring-[#8C7B6E] transition-all"
                 />
+                {signupConfirmPassword.length > 0 && signupPassword !== signupConfirmPassword && (
+                  <span className="text-[11px] text-red-600 block mt-1">
+                    Os campos de senha não são iguais.
+                  </span>
+                )}
               </div>
 
               {/* Submit Button */}
               <button
                 type="submit"
                 id="btn-signup-submit"
-                disabled={loading || googleLoading}
-                className="w-full mt-2 py-2.5 px-4 rounded-lg bg-[#8C7B6E] hover:bg-[#7b6a5d] text-[#F9F7F2] font-medium text-sm transition-colors cursor-pointer flex items-center justify-center gap-2 shadow-sm disabled:opacity-60"
+                disabled={loading || !isSignupFormValid}
+                className="w-full mt-2 py-2.5 px-4 rounded-lg bg-[#8C7B6E] hover:bg-[#7b6a5d] text-[#F9F7F2] font-medium text-sm transition-colors cursor-pointer flex items-center justify-center gap-2 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {loading && <Loader2 className="w-4 h-4 animate-spin" />}
                 <span>Criar conta</span>
@@ -415,9 +543,9 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
           <button
             type="button"
             id="btn-google-auth"
-            disabled={loading || googleLoading}
+            disabled={googleLoading}
             onClick={handleGoogleLogin}
-            className="w-full py-2.5 px-4 rounded-lg bg-[#FFFFFF] hover:bg-[#F9F7F2] border border-[#D9C5B2] text-[#3D352E] font-medium text-xs sm:text-sm transition-colors cursor-pointer flex items-center justify-center gap-3 shadow-2xs disabled:opacity-60"
+            className="w-full py-2.5 px-4 rounded-lg bg-[#FFFFFF] hover:bg-[#F9F7F2] border border-[#D9C5B2] text-[#3D352E] font-medium text-xs sm:text-sm transition-colors cursor-pointer flex items-center justify-center gap-3 shadow-2xs disabled:opacity-60 disabled:cursor-not-allowed"
           >
             {googleLoading ? (
               <Loader2 className="w-4 h-4 animate-spin text-[#8C7B6E]" />

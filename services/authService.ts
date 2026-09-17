@@ -94,27 +94,42 @@ export const authService = {
     const supabase = getSupabase();
     if (supabase && isSupabaseConfigured) {
       try {
-        // Try RPC first if created
-        const { data: rpcAvailable, error: rpcErr } = await supabase.rpc('is_username_available', {
-          p_username: clean,
-        });
+        const checkPromise = (async (): Promise<{ available: boolean; error?: string }> => {
+          // 1. Tenta RPC segura is_username_available
+          const { data: rpcAvailable, error: rpcErr } = await supabase.rpc('is_username_available', {
+            p_username: clean,
+          });
 
-        if (!rpcErr && typeof rpcAvailable === 'boolean') {
-          return { available: rpcAvailable, error: rpcAvailable ? undefined : 'Este login já está em uso.' };
-        }
+          if (!rpcErr && typeof rpcAvailable === 'boolean') {
+            return {
+              available: rpcAvailable,
+              error: rpcAvailable ? undefined : 'Este usuário já está em uso.',
+            };
+          }
 
-        // Fallback to direct query on profiles
-        const { data } = await supabase
-          .from('profiles')
-          .select('id')
-          .eq('username', clean)
-          .maybeSingle();
+          // 2. Fallback direto caso a RPC ainda não esteja ativa
+          const { data, error: selectErr } = await supabase
+            .from('profiles')
+            .select('id')
+            .eq('username', clean)
+            .maybeSingle();
 
-        if (data) {
-          return { available: false, error: 'Este login já está em uso.' };
-        }
-      } catch {
-        // Continue if profile table doesn't have username yet
+          if (!selectErr && data) {
+            return { available: false, error: 'Este usuário já está em uso.' };
+          }
+
+          return { available: true };
+        })();
+
+        // Timeout de segurança de 3500ms para nunca deixar o formulário preso
+        const timeoutPromise = new Promise<{ available: boolean; error?: string }>((resolve) =>
+          setTimeout(() => resolve({ available: true }), 3500)
+        );
+
+        return await Promise.race([checkPromise, timeoutPromise]);
+      } catch (err) {
+        console.warn('Erro ao consultar disponibilidade de usuário:', err);
+        return { available: true };
       }
     }
 
