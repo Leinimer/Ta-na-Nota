@@ -63,12 +63,12 @@ export function AuthModal({ isOpen, onClose, currentUser, onUserChanged }: AuthM
     <div id="auth-modal-overlay" className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4">
       <div
         id="auth-modal-card"
-        className="w-full max-w-md bg-[#ffffff] dark:bg-[#23221e] border border-[#d1c4bc] dark:border-[#44403a] rounded-xl shadow-xl p-6 sm:p-8 text-[#1b1c19] dark:text-[#f2f1ec] relative animate-in fade-in zoom-in-95 duration-150"
+        className="w-full max-w-md bg-[#fefdfa] dark:bg-[#282421] border border-[#ded7c8] dark:border-[#443e37] rounded-xl shadow-xl p-6 sm:p-8 text-[#2d2621] dark:text-[#f5f2eb] relative animate-in fade-in zoom-in-95 duration-150"
       >
         <button
           id="close-auth-modal"
           onClick={onClose}
-          className="absolute top-4 right-4 text-[#7f756e] hover:text-[#1b1c19] dark:hover:text-[#ffffff] p-1 rounded-md transition-colors"
+          className="absolute top-4 right-4 text-[#7d7064] hover:text-[#2d2621] dark:hover:text-[#ffffff] p-1 rounded-md transition-colors"
           aria-label="Fechar"
         >
           <X className="w-5 h-5" />
@@ -76,16 +76,16 @@ export function AuthModal({ isOpen, onClose, currentUser, onUserChanged }: AuthM
 
         {currentUser && currentUser.id !== 'demo-user-tactility-1' ? (
           <div className="space-y-4 text-center">
-            <div className="w-14 h-14 bg-[#f4dfcb] dark:bg-[#3c3328] text-[#68594d] dark:text-[#d7c3b4] rounded-full mx-auto flex items-center justify-center font-bold text-xl">
+            <div className="w-14 h-14 bg-[#edd9c4] dark:bg-[#3c3328] text-[#5c4e42] dark:text-[#dfd5c8] rounded-full mx-auto flex items-center justify-center font-bold text-xl">
               {currentUser.displayName?.[0]?.toUpperCase() || 'U'}
             </div>
             <h3 className="text-xl font-medium tracking-tight">Sua Conta</h3>
-            <p className="text-sm text-[#7f756e]">{currentUser.email}</p>
-            <div className="pt-4 border-t border-[#eae8e3] dark:border-[#2f2d29]">
+            <p className="text-sm text-[#7d7064]">{currentUser.email}</p>
+            <div className="pt-4 border-t border-[#ded7c8] dark:border-[#38322b]">
               <button
                 id="btn-signout"
                 onClick={handleLogout}
-                className="w-full py-2.5 px-4 rounded-lg bg-[#eae8e3] hover:bg-[#d1c4bc] dark:bg-[#2c2a26] dark:hover:bg-[#36342f] text-sm font-medium transition-colors cursor-pointer"
+                className="w-full py-2.5 px-4 rounded-lg bg-[#ede7dc] hover:bg-[#ded7c8] dark:bg-[#332d28] dark:hover:bg-[#3d3731] text-sm font-medium transition-colors cursor-pointer text-[#2d2621] dark:text-[#f5f2eb]"
               >
                 Encerrar Sessão
               </button>
@@ -94,12 +94,12 @@ export function AuthModal({ isOpen, onClose, currentUser, onUserChanged }: AuthM
         ) : (
           <div>
             <div className="text-center mb-6">
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-[#f5f3ee] dark:bg-[#2c2a26] text-[#68594d] dark:text-[#d7c3b4] mb-3">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-[#ede7dc] dark:bg-[#332d28] text-[#5c4e42] dark:text-[#dfd5c8] mb-3">
                 <Shield className="w-3.5 h-3.5" />
                 {isSupabaseConfigured ? 'Supabase Conectado' : 'Modo Offline Ativo'}
               </span>
-              <h2 className="text-2xl font-serif font-medium tracking-tight">Digital Tactility</h2>
-              <p className="text-sm text-[#7f756e] mt-1">Um espaço silencioso para sua escrita e conhecimento</p>
+              <h2 className="text-2xl font-serif font-medium tracking-tight text-[#2d2621] dark:text-[#f5f2eb]">Tá na nota</h2>
+              <p className="text-sm text-[#7d7064] mt-1">Seu espaço pessoal de organização de conhecimento e anotações</p>
             </div>
 
             {error && (

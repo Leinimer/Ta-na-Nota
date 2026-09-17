@@ -40,6 +40,19 @@ import {
   Calendar,
 } from 'lucide-react';
 
+import { NoteTagsBar } from './NoteTagsBar';
+
+function formatLastModifiedTime(isoDate?: string) {
+  if (!isoDate) return '';
+  try {
+    const d = new Date(isoDate);
+    if (isNaN(d.getTime())) return '';
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '';
+  }
+}
+
 interface NoteEditorProps {
   node: TreeNode;
   note: NoteRecord;
@@ -303,32 +316,39 @@ export function NoteEditor({
   }, [backlinks, onNavigateToNote]);
 
   return (
-    <div id="note-editor-container" className="flex flex-col flex-1 h-full bg-[#fbf9f4] dark:bg-[#191816] overflow-hidden">
+    <div id="note-editor-container" className="flex flex-col flex-1 h-full bg-[#f8f6f1] dark:bg-[#211e1b] overflow-hidden">
       {/* 1. Note Header Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-2 px-6 py-3 border-b border-[#eae8e3] dark:border-[#2f2d29] bg-[#ffffff] dark:bg-[#201f1c]">
-        {/* Title Input */}
-        <div className="flex items-center gap-2 flex-1 min-w-[200px]">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-3 border-b border-[#ded7c8] dark:border-[#38322b] bg-[#fefdfa] dark:bg-[#282421]">
+        {/* Title Input & Tags */}
+        <div className="flex flex-col flex-1 min-w-[240px] gap-1">
           <input
             id="note-title-input"
             type="text"
             value={title}
             onChange={(e) => handleTitleChange(e.target.value)}
             placeholder="Título da anotação..."
-            className="w-full text-xl sm:text-2xl font-serif font-semibold text-[#1b1c19] dark:text-[#f2f1ec] bg-transparent outline-none border-b border-transparent hover:border-[#d1c4bc] focus:border-[#68594d] transition-colors py-0.5"
+            className="w-full text-xl sm:text-2xl font-serif font-semibold text-[#2d2621] dark:text-[#f5f2eb] bg-transparent outline-none border-b border-transparent hover:border-[#ded7c8] focus:border-[#5c4e42] transition-colors py-0.5 placeholder:text-[#7d7064]/60"
+          />
+
+          {/* Tags directly below title with + button */}
+          <NoteTagsBar
+            userId={node.userId}
+            noteId={note.id}
+            onTagClick={(tag) => onTagClick && onTagClick(tag.name)}
           />
         </div>
 
-        {/* Action controls */}
-        <div className="flex items-center gap-1.5 shrink-0">
+        {/* Right side controls: Mode switcher, Save Status, Last Modified, Actions */}
+        <div className="flex flex-wrap items-center gap-2 shrink-0">
           {/* Mode Switcher: Visual vs Markdown */}
-          <div className="flex items-center p-0.5 rounded-lg bg-[#f5f3ee] dark:bg-[#2c2a26] border border-[#d1c4bc] dark:border-[#44403a] text-xs">
+          <div className="flex items-center p-0.5 rounded-lg bg-[#ede7dc] dark:bg-[#332d28] border border-[#ded7c8] dark:border-[#443e37] text-xs">
             <button
               id="btn-mode-visual"
               onClick={() => handleToggleMode('visual')}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-medium transition-all ${
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
                 mode === 'visual'
-                  ? 'bg-[#ffffff] dark:bg-[#36342f] text-[#68594d] dark:text-[#d7c3b4] shadow-xs'
-                  : 'text-[#7f756e] hover:text-[#1b1c19]'
+                  ? 'bg-[#fefdfa] dark:bg-[#282421] text-[#5c4e42] dark:text-[#dfd5c8] shadow-2xs'
+                  : 'text-[#7d7064] hover:text-[#2d2621]'
               }`}
             >
               <Eye className="w-3.5 h-3.5" />
@@ -337,10 +357,10 @@ export function NoteEditor({
             <button
               id="btn-mode-markdown"
               onClick={() => handleToggleMode('markdown')}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-medium transition-all ${
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
                 mode === 'markdown'
-                  ? 'bg-[#ffffff] dark:bg-[#36342f] text-[#68594d] dark:text-[#d7c3b4] shadow-xs'
-                  : 'text-[#7f756e] hover:text-[#1b1c19]'
+                  ? 'bg-[#fefdfa] dark:bg-[#282421] text-[#5c4e42] dark:text-[#dfd5c8] shadow-2xs'
+                  : 'text-[#7d7064] hover:text-[#2d2621]'
               }`}
             >
               <Code2 className="w-3.5 h-3.5" />
@@ -348,49 +368,73 @@ export function NoteEditor({
             </button>
           </div>
 
-          {/* Favorite toggle */}
-          <button
-            id="btn-note-favorite"
-            title={node.isFavorite ? 'Remover dos favoritos' : 'Favoritar nota'}
-            onClick={() => onToggleFavorite(node.id)}
-            className="p-2 text-[#7f756e] hover:text-[#1b1c19] dark:hover:text-[#ffffff] rounded-lg hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] transition-colors"
-          >
-            <Star className={`w-4 h-4 ${node.isFavorite ? 'fill-amber-500 text-amber-500' : ''}`} />
-          </button>
+          {/* Save Status & Last Modified Indicator directly beside Visual | Markdown */}
+          <div className="flex items-center gap-2 text-xs text-[#7d7064] border-l border-[#ded7c8] dark:border-[#38322b] pl-2.5 py-0.5 select-none">
+            {syncStatus === 'saving' && (
+              <span className="flex items-center gap-1 text-[11px] text-amber-700 dark:text-amber-400">
+                <RefreshCw className="w-3 h-3 animate-spin" /> Salvando...
+              </span>
+            )}
+            {syncStatus === 'saved' && (
+              <span className="flex items-center gap-1 text-[11px] text-emerald-700 dark:text-emerald-400">
+                <CheckCircle2 className="w-3 h-3" /> Salvo localmente
+              </span>
+            )}
+            {syncStatus === 'offline' && (
+              <span className="flex items-center gap-1 text-[11px] text-[#7d7064]">
+                ● Offline
+              </span>
+            )}
 
-          {/* Duplicate note */}
-          <button
-            id="btn-note-duplicate"
-            title="Duplicar nota"
-            onClick={() => onDuplicateNote(node.id)}
-            className="p-2 text-[#7f756e] hover:text-[#1b1c19] dark:hover:text-[#ffffff] rounded-lg hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] transition-colors"
-          >
-            <Copy className="w-4 h-4" />
-          </button>
+            {node.updatedAt && (
+              <span className="text-[11px] text-[#7d7064] hidden sm:inline">
+                · Última modificação: {formatLastModifiedTime(node.updatedAt)}
+              </span>
+            )}
+          </div>
 
-          {/* Export Markdown */}
-          <button
-            id="btn-note-export-md"
-            title="Exportar Markdown (.md)"
-            onClick={() => onExportNote(node.id)}
-            className="p-2 text-[#7f756e] hover:text-[#1b1c19] dark:hover:text-[#ffffff] rounded-lg hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] transition-colors"
-          >
-            <Download className="w-4 h-4" />
-          </button>
+          {/* Action buttons */}
+          <div className="flex items-center gap-1 border-l border-[#ded7c8] dark:border-[#38322b] pl-2">
+            <button
+              id="btn-note-favorite"
+              title={node.isFavorite ? 'Remover dos favoritos' : 'Favoritar nota'}
+              onClick={() => onToggleFavorite(node.id)}
+              className="p-1.5 text-[#7d7064] hover:text-[#2d2621] dark:hover:text-[#ffffff] rounded-lg hover:bg-[#e4ddcf] dark:hover:bg-[#332d28] transition-colors cursor-pointer"
+            >
+              <Star className={`w-4 h-4 ${node.isFavorite ? 'fill-amber-500 text-amber-500' : ''}`} />
+            </button>
 
-          {/* Delete note */}
-          <button
-            id="btn-note-delete"
-            title="Excluir nota"
-            onClick={() => {
-              if (confirm(`Deseja mover "${node.name}" para a lixeira?`)) {
-                onDeleteNote(node.id);
-              }
-            }}
-            className="p-2 text-[#7f756e] hover:text-red-600 dark:hover:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors"
-          >
-            <Trash2 className="w-4 h-4" />
-          </button>
+            <button
+              id="btn-note-duplicate"
+              title="Duplicar nota"
+              onClick={() => onDuplicateNote(node.id)}
+              className="p-1.5 text-[#7d7064] hover:text-[#2d2621] dark:hover:text-[#ffffff] rounded-lg hover:bg-[#e4ddcf] dark:hover:bg-[#332d28] transition-colors cursor-pointer"
+            >
+              <Copy className="w-4 h-4" />
+            </button>
+
+            <button
+              id="btn-note-export-md"
+              title="Exportar Markdown (.md)"
+              onClick={() => onExportNote(node.id)}
+              className="p-1.5 text-[#7d7064] hover:text-[#2d2621] dark:hover:text-[#ffffff] rounded-lg hover:bg-[#e4ddcf] dark:hover:bg-[#332d28] transition-colors cursor-pointer"
+            >
+              <Download className="w-4 h-4" />
+            </button>
+
+            <button
+              id="btn-note-delete"
+              title="Excluir nota"
+              onClick={() => {
+                if (confirm(`Deseja mover "${node.name}" para a lixeira?`)) {
+                  onDeleteNote(node.id);
+                }
+              }}
+              className="p-1.5 text-[#7d7064] hover:text-red-600 dark:hover:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors cursor-pointer"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       </div>
 
@@ -409,38 +453,8 @@ export function NoteEditor({
             {/* Paper Sheet Container */}
             <div
               id="tiptap-editor-wrapper"
-              className="w-full max-w-[850px] min-h-[600px] bg-[#ffffff] dark:bg-[#23221e] border border-[#d1c4bc] dark:border-[#44403a] rounded-xl shadow-xs p-6 sm:p-12 relative"
+              className="w-full max-w-[850px] min-h-[600px] bg-[#fefdfa] dark:bg-[#282421] border border-[#ded7c8] dark:border-[#38322b] rounded-xl shadow-xs p-6 sm:p-12 relative"
             >
-              {/* Note Metadata Details Bar */}
-              <div className="flex items-center justify-between pb-6 mb-6 border-b border-[#eae8e3] dark:border-[#2f2d29] text-xs text-[#7f756e]">
-                <div className="flex items-center gap-4">
-                  <span className="flex items-center gap-1">
-                    <Calendar className="w-3.5 h-3.5" />
-                    {new Date(node.updatedAt).toLocaleDateString('pt-BR', {
-                      day: '2-digit',
-                      month: 'short',
-                      year: 'numeric',
-                    })}
-                  </span>
-                  <span>
-                    {markdownContent.trim() ? markdownContent.trim().split(/\s+/).length : 0} palavras
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  {syncStatus === 'saving' && (
-                    <span className="flex items-center gap-1 text-[11px] text-amber-600">
-                      <RefreshCw className="w-3 h-3 animate-spin" /> Salvando...
-                    </span>
-                  )}
-                  {syncStatus === 'saved' && (
-                    <span className="flex items-center gap-1 text-[11px] text-emerald-600">
-                      <CheckCircle2 className="w-3 h-3" /> Salvo localmente
-                    </span>
-                  )}
-                </div>
-              </div>
-
               {/* Tiptap Canvas */}
               <EditorContent editor={editor} />
 
@@ -553,32 +567,6 @@ export function NoteEditor({
                     ))}
                   </div>
                 )}
-              </div>
-
-              {/* Tags Section */}
-              <div className="mt-8 pt-6 border-t border-[#eae8e3] dark:border-[#2f2d29]">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-xs text-[#7f756e] font-medium">Etiquetas:</span>
-                  {tags.map((tag) => (
-                    <button
-                      key={tag}
-                      onClick={() => onTagClick && onTagClick(tag)}
-                      className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-mono bg-[#f5f3ee] dark:bg-[#2c2a26] text-[#68594d] dark:text-[#d7c3b4] border border-[#d1c4bc] dark:border-[#44403a] hover:bg-[#f4dfcb]/50 transition-colors"
-                    >
-                      #{tag}
-                    </button>
-                  ))}
-
-                  <form onSubmit={handleAddTag} className="inline-flex items-center gap-1">
-                    <input
-                      type="text"
-                      value={newTagInput}
-                      onChange={(e) => setNewTagInput(e.target.value)}
-                      placeholder="+ tag"
-                      className="w-16 px-2 py-0.5 rounded-full text-xs border border-dashed border-[#d1c4bc] dark:border-[#44403a] bg-transparent outline-none focus:w-24 focus:border-[#68594d] transition-all font-mono"
-                    />
-                  </form>
-                </div>
               </div>
             </div>
           </div>

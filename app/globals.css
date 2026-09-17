@@ -2,37 +2,74 @@
 
 @layer base {
   :root {
-    --bg-paper: #fbf9f4;
-    --bg-surface-low: #f5f3ee;
-    --bg-surface-high: #eae8e3;
-    --bg-surface-variant: #e4e2dd;
-    --card-paper: #ffffff;
-    --text-primary: #1b1c19;
-    --text-muted: #4e453f;
-    --text-accent: #68594d;
-    --border-paper: #d1c4bc;
-    --border-subtle: #eae8e3;
-    --highlight-folder: #f4dfcb;
+    --background: #f8f6f1;
+    --sidebar-background: #f1ede4;
+    --editor-background: #f8f6f1;
+    --note-paper: #fefdfa;
+    --surface: #ede7dc;
+    --surface-hover: #e4ddcf;
+    --border: #ded7c8;
+    --border-subtle: #eae4d7;
+    --text-primary: #2d2621;
+    --text-secondary: #594c41;
+    --text-muted: #7d7064;
+    --accent: #5c4e42;
+    --accent-hover: #45392f;
+    --tag-background: #eee8db;
+    --tag-border: #ded7c8;
+    --tag-text: #5c4e42;
+    --selection-bg: #e5ddcd;
+    --highlight-folder: #edd9c4;
+
+    /* Legacy compatibility */
+    --bg-paper: var(--background);
+    --bg-surface-low: var(--sidebar-background);
+    --bg-surface-high: var(--surface);
+    --bg-surface-variant: var(--surface-hover);
+    --card-paper: var(--note-paper);
+    --text-accent: var(--accent);
+    --border-paper: var(--border);
   }
 
   .dark {
-    --bg-paper: #191816;
-    --bg-surface-low: #201f1c;
-    --bg-surface-high: #2c2a26;
-    --bg-surface-variant: #36342f;
-    --card-paper: #23221e;
-    --text-primary: #f2f1ec;
-    --text-muted: #bbb4aa;
-    --text-accent: #d7c3b4;
-    --border-paper: #44403a;
-    --border-subtle: #2f2d29;
-    --highlight-folder: #3c3328;
+    --background: #211e1b;
+    --sidebar-background: #1c1917;
+    --editor-background: #211e1b;
+    --note-paper: #282421;
+    --surface: #332d28;
+    --surface-hover: #3d3731;
+    --border: #443e37;
+    --border-subtle: #332e29;
+    --text-primary: #f5f2eb;
+    --text-secondary: #ddd8ce;
+    --text-muted: #a89f94;
+    --accent: #d2c5b5;
+    --accent-hover: #e5dace;
+    --tag-background: #38322b;
+    --tag-border: #4a423a;
+    --tag-text: #dfd5c8;
+    --selection-bg: #4a4136;
+    --highlight-folder: #443729;
+
+    /* Legacy compatibility */
+    --bg-paper: var(--background);
+    --bg-surface-low: var(--sidebar-background);
+    --bg-surface-high: var(--surface);
+    --bg-surface-variant: var(--surface-hover);
+    --card-paper: var(--note-paper);
+    --text-accent: var(--accent);
+    --border-paper: var(--border);
   }
 
   body {
-    background-color: var(--bg-paper);
+    background-color: var(--background);
     color: var(--text-primary);
     font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+
+  ::selection {
+    background-color: var(--selection-bg);
+    color: var(--text-primary);
   }
 }
 

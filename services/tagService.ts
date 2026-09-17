@@ -44,4 +44,56 @@ export const tagService = {
 
     return matchingNodes;
   },
+
+  async getTagsForNote(noteId: string, userId: string): Promise<TagRecord[]> {
+    const noteTagIds = await indexedDbService.getNoteTags(noteId);
+    if (!noteTagIds || noteTagIds.length === 0) return [];
+    const allTags = await indexedDbService.getTags(userId);
+    const tagMap = new Map(allTags.map((t) => [t.id, t]));
+    return noteTagIds
+      .map((id) => tagMap.get(id))
+      .filter((t): t is TagRecord => Boolean(t));
+  },
+
+  async getAllUserTags(userId: string): Promise<TagRecord[]> {
+    return indexedDbService.getTags(userId);
+  },
+
+  async addTagToNote(userId: string, noteId: string, rawTagName: string): Promise<TagRecord[]> {
+    const cleanName = rawTagName.trim().replace(/^#+/, '').trim();
+    if (!cleanName) {
+      return this.getTagsForNote(noteId, userId);
+    }
+    const normalized = cleanName.toLowerCase();
+
+    // Find existing tag or create new one
+    const allTags = await indexedDbService.getTags(userId);
+    let tag = allTags.find((t) => t.normalizedName === normalized);
+
+    if (!tag) {
+      tag = {
+        id: `tag-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        userId,
+        name: cleanName,
+        normalizedName: normalized,
+        createdAt: new Date().toISOString(),
+      };
+      await indexedDbService.saveTag(tag);
+    }
+
+    // Attach to note
+    const currentTagIds = await indexedDbService.getNoteTags(noteId);
+    if (!currentTagIds.includes(tag.id)) {
+      await indexedDbService.setNoteTags(userId, noteId, [...currentTagIds, tag.id]);
+    }
+
+    return this.getTagsForNote(noteId, userId);
+  },
+
+  async removeTagFromNote(userId: string, noteId: string, tagId: string): Promise<TagRecord[]> {
+    const currentTagIds = await indexedDbService.getNoteTags(noteId);
+    const updatedIds = currentTagIds.filter((id) => id !== tagId);
+    await indexedDbService.setNoteTags(userId, noteId, updatedIds);
+    return this.getTagsForNote(noteId, userId);
+  },
 };

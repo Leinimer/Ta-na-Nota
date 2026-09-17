@@ -19,6 +19,8 @@ import {
   Sparkles,
   Layers,
   Search,
+  X,
+  FileText,
 } from 'lucide-react';
 
 export function AppShell() {
@@ -323,10 +325,28 @@ export function AppShell() {
     };
   }, [isDraggingSidebar]);
 
+  const [selectedTagNotesModal, setSelectedTagNotesModal] = useState<{ tagName: string; notes: TreeNode[] } | null>(null);
+
+  const handleTagClick = async (tagNameOrId: string) => {
+    if (!currentUser) return;
+    try {
+      const cleanName = tagNameOrId.replace(/^#/, '').toLowerCase();
+      const tagRecord = tags.find((t) => t.id === tagNameOrId || t.name.toLowerCase() === cleanName);
+      if (tagRecord) {
+        const matchingNotes = await tagService.getNotesForTag(tagRecord.id, currentUser.id);
+        setSelectedTagNotesModal({ tagName: tagRecord.name, notes: matchingNotes });
+      } else {
+        setSelectedTagNotesModal({ tagName: cleanName, notes: [] });
+      }
+    } catch (err) {
+      console.warn('Error fetching notes for tag:', err);
+    }
+  };
+
   return (
     <div
       id="app-shell"
-      className="flex h-screen w-screen overflow-hidden bg-[#fbf9f4] dark:bg-[#191816] text-[#1b1c19] dark:text-[#f2f1ec] font-sans paper-texture"
+      className="flex h-screen w-screen overflow-hidden bg-[#f8f6f1] dark:bg-[#211e1b] text-[#2d2621] dark:text-[#f5f2eb] font-sans paper-texture"
     >
       {/* Mobile Drawer Backdrop */}
       {isMobileDrawerOpen && (
@@ -405,6 +425,7 @@ export function AppShell() {
           onExportNote={handleExportNote}
           onExportAll={handleExportAll}
           onMoveNode={handleMoveNode}
+          onFilterByTag={handleTagClick}
           onCloseMobileDrawer={() => setIsMobileDrawerOpen(false)}
         />
       </div>
@@ -412,18 +433,18 @@ export function AppShell() {
       {/* Main Content Area */}
       <main id="main-content-canvas" className="flex-1 flex flex-col h-full overflow-hidden relative">
         {/* Mobile Header Toggle */}
-        <div className="md:hidden flex items-center justify-between px-4 py-2.5 bg-[#ffffff] dark:bg-[#201f1c] border-b border-[#eae8e3] dark:border-[#2f2d29]">
+        <div className="md:hidden flex items-center justify-between px-4 py-2.5 bg-[#fefdfa] dark:bg-[#282421] border-b border-[#ded7c8] dark:border-[#38322b]">
           <button
             onClick={() => setIsMobileDrawerOpen(true)}
-            className="p-1.5 text-[#7f756e] hover:text-[#1b1c19] rounded-md hover:bg-[#f5f3ee] dark:hover:bg-[#2c2a26]"
+            className="p-1.5 text-[#7d7064] hover:text-[#2d2621] rounded-md hover:bg-[#ede7dc] dark:hover:bg-[#332d28]"
             aria-label="Abrir Menu de Pastas"
           >
             <Menu className="w-5 h-5" />
           </button>
-          <span className="font-serif font-semibold text-sm">Digital Tactility</span>
+          <span className="font-serif font-semibold text-sm text-[#2d2621] dark:text-[#f5f2eb]">Tá na nota</span>
           <button
             onClick={() => setIsCommandPaletteOpen(true)}
-            className="p-1.5 text-[#7f756e] hover:text-[#1b1c19] rounded-md hover:bg-[#f5f3ee] dark:hover:bg-[#2c2a26]"
+            className="p-1.5 text-[#7d7064] hover:text-[#2d2621] rounded-md hover:bg-[#ede7dc] dark:hover:bg-[#332d28]"
             aria-label="Buscar"
           >
             <Search className="w-5 h-5" />
@@ -444,29 +465,30 @@ export function AppShell() {
             onDuplicateNote={handleDuplicateNote}
             onExportNote={handleExportNote}
             onNavigateToNote={selectNodeById}
+            onTagClick={handleTagClick}
           />
         ) : (
-          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-[#fbf9f4] dark:bg-[#191816]">
+          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-[#f8f6f1] dark:bg-[#211e1b]">
             <div className="max-w-md space-y-4">
-              <div className="w-16 h-16 rounded-2xl bg-[#f4dfcb] dark:bg-[#3c3328] text-[#68594d] dark:text-[#d7c3b4] flex items-center justify-center mx-auto shadow-sm">
+              <div className="w-16 h-16 rounded-2xl bg-[#edd9c4] dark:bg-[#3c3328] text-[#5c4e42] dark:text-[#dfd5c8] flex items-center justify-center mx-auto shadow-2xs border border-[#ded7c8] dark:border-[#443e37]">
                 <BookOpen className="w-8 h-8" />
               </div>
-              <h2 className="text-2xl font-serif font-semibold text-[#1b1c19] dark:text-[#f2f1ec] tracking-tight">
+              <h2 className="text-2xl font-serif font-semibold text-[#2d2621] dark:text-[#f5f2eb] tracking-tight">
                 Seu Segundo Cérebro Digital
               </h2>
-              <p className="text-sm text-[#7f756e] leading-relaxed">
+              <p className="text-sm text-[#7d7064] leading-relaxed">
                 A árvore organiza. A nota armazena. Os links conectam. As tags categorizam. A busca encontra.
               </p>
               <div className="pt-2 flex flex-wrap justify-center gap-2">
                 <button
                   onClick={() => handleCreateNote(null)}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#68594d] hover:bg-[#574a3f] text-white text-xs font-medium transition-colors cursor-pointer shadow-xs"
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#5c4e42] hover:bg-[#483d34] text-white text-xs font-medium transition-colors cursor-pointer shadow-xs"
                 >
                   <FilePlus className="w-4 h-4" /> Criar Primeira Nota
                 </button>
                 <button
                   onClick={() => handleCreateFolder(null)}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-[#d1c4bc] dark:border-[#44403a] bg-white dark:bg-[#282724] hover:bg-[#eae8e3] dark:hover:bg-[#36342f] text-xs font-medium text-[#1b1c19] dark:text-[#f2f1ec] transition-colors cursor-pointer"
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-[#ded7c8] dark:border-[#443e37] bg-[#fefdfa] dark:bg-[#282421] hover:bg-[#ede7dc] dark:hover:bg-[#332d28] text-xs font-medium text-[#2d2621] dark:text-[#f5f2eb] transition-colors cursor-pointer"
                 >
                   <FolderPlus className="w-4 h-4" /> Criar Pasta
                 </button>
@@ -499,6 +521,72 @@ export function AppShell() {
           if (user) refreshAppData(user.id);
         }}
       />
+
+      {/* Tag Notes Listing Modal */}
+      {selectedTagNotesModal && (
+        <div
+          id="tag-notes-modal-overlay"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-xs p-4"
+          onClick={() => setSelectedTagNotesModal(null)}
+        >
+          <div
+            id="tag-notes-modal-card"
+            className="w-full max-w-md bg-[#fefdfa] dark:bg-[#282421] border border-[#ded7c8] dark:border-[#443e37] rounded-xl shadow-xl p-6 text-[#2d2621] dark:text-[#f5f2eb] relative animate-in fade-in zoom-in-95 duration-150"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-[#ded7c8] dark:border-[#38322b] mb-4">
+              <div className="flex items-center gap-2">
+                <span className="font-mono font-medium text-xs text-[#5c4e42] dark:text-[#dfd5c8] bg-[#ede7dc] dark:bg-[#332d28] px-2.5 py-0.5 rounded-full border border-[#ded7c8] dark:border-[#443e37]">
+                  #{selectedTagNotesModal.tagName}
+                </span>
+                <span className="text-xs text-[#7d7064]">
+                  ({selectedTagNotesModal.notes.length} {selectedTagNotesModal.notes.length === 1 ? 'nota' : 'notas'})
+                </span>
+              </div>
+              <button
+                onClick={() => setSelectedTagNotesModal(null)}
+                className="text-[#7d7064] hover:text-[#2d2621] dark:hover:text-[#ffffff] p-1 rounded-md transition-colors cursor-pointer"
+                aria-label="Fechar"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="text-xs font-semibold text-[#7d7064] uppercase tracking-wider mb-2">
+              Notas associadas
+            </div>
+
+            {selectedTagNotesModal.notes.length === 0 ? (
+              <div className="py-6 text-center text-xs text-[#7d7064] italic">
+                Nenhuma nota associada a esta etiqueta no momento.
+              </div>
+            ) : (
+              <div className="max-h-72 overflow-y-auto space-y-1.5 custom-scrollbar pr-1">
+                {selectedTagNotesModal.notes.map((n) => (
+                  <button
+                    key={n.id}
+                    onClick={() => {
+                      selectNode(n);
+                      setSelectedTagNotesModal(null);
+                    }}
+                    className="w-full flex items-center justify-between p-2.5 rounded-lg bg-[#ede7dc]/40 hover:bg-[#ede7dc] dark:bg-[#332d28]/40 dark:hover:bg-[#332d28] border border-[#ded7c8] dark:border-[#38322b] text-left transition-colors cursor-pointer group"
+                  >
+                    <div className="flex items-center gap-2.5 truncate">
+                      <FileText className="w-4 h-4 text-[#5c4e42] dark:text-[#dfd5c8] shrink-0" />
+                      <span className="text-sm font-medium truncate text-[#2d2621] dark:text-[#f5f2eb]">
+                        {n.name}
+                      </span>
+                    </div>
+                    <span className="text-[11px] text-[#7d7064] group-hover:text-[#5c4e42] shrink-0">
+                      Abrir →
+                    </span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

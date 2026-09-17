@@ -2,17 +2,17 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Digital Tactility — Segundo Cérebro',
-  description: 'Sistema pessoal de organização de conhecimento com árvore hierárquica infinita, editor rico Tiptap, Markdown, tags, backlinks e persistência local e em nuvem.',
+  title: 'Tá na nota',
+  description: 'Tá na nota — Seu espaço pessoal de organização de conhecimento, anotações e ideias.',
   openGraph: {
-    title: 'Digital Tactility — Segundo Cérebro',
-    description: 'Sistema pessoal de organização de conhecimento com árvore hierárquica infinita, editor rico Tiptap, Markdown, tags, backlinks e persistência local e em nuvem.',
+    title: 'Tá na nota',
+    description: 'Tá na nota — Seu espaço pessoal de organização de conhecimento, anotações e ideias.',
     type: 'website',
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'Digital Tactility — Segundo Cérebro',
-    description: 'Sistema pessoal de organização de conhecimento com árvore hierárquica infinita, editor rico Tiptap, Markdown, tags, backlinks e persistência local e em nuvem.',
+    title: 'Tá na nota',
+    description: 'Tá na nota — Seu espaço pessoal de organização de conhecimento, anotações e ideias.',
   },
 };
 

@@ -116,31 +116,31 @@ export function Sidebar({
   return (
     <aside
       id="app-sidebar"
-      className="w-full h-full flex flex-col bg-[#f5f3ee] dark:bg-[#1f1e1b] border-r border-[#d1c4bc] dark:border-[#383530] text-[#1b1c19] dark:text-[#f2f1ec] select-none"
+      className="w-full h-full flex flex-col bg-[#f1ede4] dark:bg-[#1c1917] border-r border-[#ded7c8] dark:border-[#38322b] text-[#2d2621] dark:text-[#f5f2eb] select-none"
     >
       {/* 1. Header & Identity */}
-      <div className="p-3.5 border-b border-[#eae8e3] dark:border-[#2f2d29] flex items-center justify-between">
+      <div className="p-3.5 border-b border-[#ded7c8] dark:border-[#38322b] flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-md bg-[#68594d] text-white flex items-center justify-center font-serif font-bold text-sm shadow-xs">
+          <div className="w-7 h-7 rounded-md bg-[#5c4e42] text-[#fefdfa] flex items-center justify-center font-serif font-bold text-sm shadow-xs">
             T
           </div>
           <div>
-            <h1 className="font-serif font-semibold text-sm tracking-tight leading-none text-[#1b1c19] dark:text-[#f2f1ec]">
-              Digital Tactility
+            <h1 className="font-serif font-semibold text-sm tracking-tight leading-none text-[#2d2621] dark:text-[#f5f2eb]">
+              Tá na nota
             </h1>
             <div className="flex items-center gap-1.5 mt-0.5">
               {syncStatus === 'saving' && (
-                <span className="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400">
+                <span className="flex items-center gap-1 text-[10px] text-amber-700 dark:text-amber-400">
                   <RefreshCw className="w-2.5 h-2.5 animate-spin" /> Salvando...
                 </span>
               )}
               {syncStatus === 'saved' && (
-                <span className="flex items-center gap-1 text-[10px] text-emerald-600 dark:text-emerald-400">
+                <span className="flex items-center gap-1 text-[10px] text-emerald-700 dark:text-emerald-400">
                   <CheckCircle2 className="w-2.5 h-2.5" /> Salvo
                 </span>
               )}
               {syncStatus === 'offline' && (
-                <span className="flex items-center gap-1 text-[10px] text-[#7f756e]">
+                <span className="flex items-center gap-1 text-[10px] text-[#7d7064]">
                   <WifiOff className="w-2.5 h-2.5" /> Local
                 </span>
               )}
@@ -153,7 +153,7 @@ export function Sidebar({
             id="btn-toggle-theme"
             title="Alternar Tema"
             onClick={onToggleTheme}
-            className="p-1.5 text-[#7f756e] hover:text-[#1b1c19] dark:hover:text-[#ffffff] rounded-md hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] transition-colors"
+            className="p-1.5 text-[#7d7064] hover:text-[#2d2621] dark:hover:text-[#ffffff] rounded-md hover:bg-[#e4ddcf] dark:hover:bg-[#2c2824] transition-colors"
           >
             {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
@@ -161,7 +161,7 @@ export function Sidebar({
             id="btn-open-user-profile"
             title="Conta & Sincronização"
             onClick={onOpenAuth}
-            className="p-1.5 text-[#7f756e] hover:text-[#1b1c19] dark:hover:text-[#ffffff] rounded-md hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] transition-colors"
+            className="p-1.5 text-[#7d7064] hover:text-[#2d2621] dark:hover:text-[#ffffff] rounded-md hover:bg-[#e4ddcf] dark:hover:bg-[#2c2824] transition-colors"
           >
             <UserIcon className="w-4 h-4" />
           </button>
@@ -169,16 +169,16 @@ export function Sidebar({
       </div>
 
       {/* 2. Search & Command Palette Trigger */}
-      <div className="p-3 border-b border-[#eae8e3] dark:border-[#2f2d29]">
+      <div className="p-3 border-b border-[#ded7c8] dark:border-[#38322b]">
         <div
           onClick={onOpenCommandPalette}
-          className="w-full flex items-center justify-between px-2.5 py-1.5 bg-[#ffffff] dark:bg-[#282724] border border-[#d1c4bc] dark:border-[#44403a] rounded-lg text-xs text-[#7f756e] hover:border-[#68594d] transition-colors cursor-pointer shadow-2xs"
+          className="w-full flex items-center justify-between px-2.5 py-1.5 bg-[#fefdfa] dark:bg-[#282421] border border-[#ded7c8] dark:border-[#443e37] rounded-lg text-xs text-[#7d7064] hover:border-[#5c4e42] transition-colors cursor-pointer shadow-2xs"
         >
           <div className="flex items-center gap-2">
-            <Search className="w-3.5 h-3.5 text-[#7f756e]" />
+            <Search className="w-3.5 h-3.5 text-[#7d7064]" />
             <span>Buscar notas, tags...</span>
           </div>
-          <kbd className="px-1.5 py-0.5 text-[10px] bg-[#eae8e3] dark:bg-[#36342f] rounded border border-[#d1c4bc] dark:border-[#44403a] text-[#7f756e] font-mono">
+          <kbd className="px-1.5 py-0.5 text-[10px] bg-[#ede7dc] dark:bg-[#332d28] rounded border border-[#ded7c8] dark:border-[#443e37] text-[#7d7064] font-mono">
             ⌘K
           </kbd>
         </div>
@@ -193,8 +193,8 @@ export function Sidebar({
           }}
           className={`py-1.5 px-2 rounded-md font-medium flex items-center justify-center gap-1 transition-all ${
             activeTab === 'tree'
-              ? 'bg-[#f4dfcb] dark:bg-[#3c3328] text-[#68594d] dark:text-[#d7c3b4] shadow-2xs'
-              : 'text-[#7f756e] hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26]'
+              ? 'bg-[#edd9c4] dark:bg-[#3c3328] text-[#5c4e42] dark:text-[#dfd5c8] shadow-2xs'
+              : 'text-[#7d7064] hover:bg-[#e4ddcf] dark:hover:bg-[#2c2824]'
           }`}
           title="Árvore de Pastas"
         >

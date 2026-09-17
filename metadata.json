@@ -1,6 +1,6 @@
 {
-  "name": "Digital Tactility — Segundo Cérebro",
-  "description": "Sistema pessoal de organização de conhecimento com árvore hierárquica infinita, editor rico Tiptap, Markdown, tags, backlinks e persistência local e em nuvem.",
+  "name": "Tá na nota",
+  "description": "Tá na nota — Seu espaço pessoal de organização de conhecimento, anotações e ideias.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
