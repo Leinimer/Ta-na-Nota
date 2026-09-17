@@ -316,9 +316,9 @@ export function NoteEditor({
   }, [backlinks, onNavigateToNote]);
 
   return (
-    <div id="note-editor-container" className="flex flex-col flex-1 h-full bg-[#f8f6f1] dark:bg-[#211e1b] overflow-hidden">
+    <div id="note-editor-container" className="flex flex-col flex-1 h-full bg-[#F9F7F2] overflow-hidden">
       {/* 1. Note Header Bar */}
-      <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-3 border-b border-[#ded7c8] dark:border-[#38322b] bg-[#fefdfa] dark:bg-[#282421]">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-6 py-3 border-b border-[#E3DCD2] bg-[#F9F7F2]">
         {/* Title Input & Tags */}
         <div className="flex flex-col flex-1 min-w-[240px] gap-1">
           <input
@@ -327,7 +327,7 @@ export function NoteEditor({
             value={title}
             onChange={(e) => handleTitleChange(e.target.value)}
             placeholder="Título da anotação..."
-            className="w-full text-xl sm:text-2xl font-serif font-semibold text-[#2d2621] dark:text-[#f5f2eb] bg-transparent outline-none border-b border-transparent hover:border-[#ded7c8] focus:border-[#5c4e42] transition-colors py-0.5 placeholder:text-[#7d7064]/60"
+            className="w-full text-xl sm:text-2xl font-serif font-semibold text-[#8C7B6E] bg-transparent outline-none border-b border-transparent hover:border-[#E3DCD2] focus:border-[#8C7B6E] transition-colors py-0.5 placeholder:text-[#8C7B6E]/50"
           />
 
           {/* Tags directly below title with + button */}
@@ -341,14 +341,14 @@ export function NoteEditor({
         {/* Right side controls: Mode switcher, Save Status, Last Modified, Actions */}
         <div className="flex flex-wrap items-center gap-2 shrink-0">
           {/* Mode Switcher: Visual vs Markdown */}
-          <div className="flex items-center p-0.5 rounded-lg bg-[#ede7dc] dark:bg-[#332d28] border border-[#ded7c8] dark:border-[#443e37] text-xs">
+          <div className="flex items-center p-0.5 rounded-lg bg-[#E3DCD2] border border-[#D9C5B2] text-xs">
             <button
               id="btn-mode-visual"
               onClick={() => handleToggleMode('visual')}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
                 mode === 'visual'
-                  ? 'bg-[#fefdfa] dark:bg-[#282421] text-[#5c4e42] dark:text-[#dfd5c8] shadow-2xs'
-                  : 'text-[#7d7064] hover:text-[#2d2621]'
+                  ? 'bg-[#D9C5B2] text-[#8C7B6E] shadow-2xs'
+                  : 'text-[#8C7B6E]/80 hover:text-[#8C7B6E]'
               }`}
             >
               <Eye className="w-3.5 h-3.5" />
@@ -359,8 +359,8 @@ export function NoteEditor({
               onClick={() => handleToggleMode('markdown')}
               className={`flex items-center gap-1 px-2.5 py-1 rounded-md font-medium transition-all cursor-pointer ${
                 mode === 'markdown'
-                  ? 'bg-[#fefdfa] dark:bg-[#282421] text-[#5c4e42] dark:text-[#dfd5c8] shadow-2xs'
-                  : 'text-[#7d7064] hover:text-[#2d2621]'
+                  ? 'bg-[#D9C5B2] text-[#8C7B6E] shadow-2xs'
+                  : 'text-[#8C7B6E]/80 hover:text-[#8C7B6E]'
               }`}
             >
               <Code2 className="w-3.5 h-3.5" />
@@ -369,37 +369,37 @@ export function NoteEditor({
           </div>
 
           {/* Save Status & Last Modified Indicator directly beside Visual | Markdown */}
-          <div className="flex items-center gap-2 text-xs text-[#7d7064] border-l border-[#ded7c8] dark:border-[#38322b] pl-2.5 py-0.5 select-none">
+          <div className="flex items-center gap-2 text-xs text-[#8C7B6E] border-l border-[#E3DCD2] pl-2.5 py-0.5 select-none">
             {syncStatus === 'saving' && (
-              <span className="flex items-center gap-1 text-[11px] text-amber-700 dark:text-amber-400">
+              <span className="flex items-center gap-1 text-[11px] text-amber-700">
                 <RefreshCw className="w-3 h-3 animate-spin" /> Salvando...
               </span>
             )}
             {syncStatus === 'saved' && (
-              <span className="flex items-center gap-1 text-[11px] text-emerald-700 dark:text-emerald-400">
+              <span className="flex items-center gap-1 text-[11px] text-emerald-700">
                 <CheckCircle2 className="w-3 h-3" /> Salvo localmente
               </span>
             )}
             {syncStatus === 'offline' && (
-              <span className="flex items-center gap-1 text-[11px] text-[#7d7064]">
+              <span className="flex items-center gap-1 text-[11px] text-[#8C7B6E]/70">
                 ● Offline
               </span>
             )}
 
             {node.updatedAt && (
-              <span className="text-[11px] text-[#7d7064] hidden sm:inline">
+              <span className="text-[11px] text-[#8C7B6E]/70 hidden sm:inline">
                 · Última modificação: {formatLastModifiedTime(node.updatedAt)}
               </span>
             )}
           </div>
 
           {/* Action buttons */}
-          <div className="flex items-center gap-1 border-l border-[#ded7c8] dark:border-[#38322b] pl-2">
+          <div className="flex items-center gap-1 border-l border-[#E3DCD2] pl-2">
             <button
               id="btn-note-favorite"
               title={node.isFavorite ? 'Remover dos favoritos' : 'Favoritar nota'}
               onClick={() => onToggleFavorite(node.id)}
-              className="p-1.5 text-[#7d7064] hover:text-[#2d2621] dark:hover:text-[#ffffff] rounded-lg hover:bg-[#e4ddcf] dark:hover:bg-[#332d28] transition-colors cursor-pointer"
+              className="p-1.5 text-[#8C7B6E] hover:text-[#3D352E] rounded-lg hover:bg-[#E3DCD2] transition-colors cursor-pointer"
             >
               <Star className={`w-4 h-4 ${node.isFavorite ? 'fill-amber-500 text-amber-500' : ''}`} />
             </button>
@@ -408,7 +408,7 @@ export function NoteEditor({
               id="btn-note-duplicate"
               title="Duplicar nota"
               onClick={() => onDuplicateNote(node.id)}
-              className="p-1.5 text-[#7d7064] hover:text-[#2d2621] dark:hover:text-[#ffffff] rounded-lg hover:bg-[#e4ddcf] dark:hover:bg-[#332d28] transition-colors cursor-pointer"
+              className="p-1.5 text-[#8C7B6E] hover:text-[#3D352E] rounded-lg hover:bg-[#E3DCD2] transition-colors cursor-pointer"
             >
               <Copy className="w-4 h-4" />
             </button>
@@ -417,7 +417,7 @@ export function NoteEditor({
               id="btn-note-export-md"
               title="Exportar Markdown (.md)"
               onClick={() => onExportNote(node.id)}
-              className="p-1.5 text-[#7d7064] hover:text-[#2d2621] dark:hover:text-[#ffffff] rounded-lg hover:bg-[#e4ddcf] dark:hover:bg-[#332d28] transition-colors cursor-pointer"
+              className="p-1.5 text-[#8C7B6E] hover:text-[#3D352E] rounded-lg hover:bg-[#E3DCD2] transition-colors cursor-pointer"
             >
               <Download className="w-4 h-4" />
             </button>
@@ -430,7 +430,7 @@ export function NoteEditor({
                   onDeleteNote(node.id);
                 }
               }}
-              className="p-1.5 text-[#7d7064] hover:text-red-600 dark:hover:text-red-400 rounded-lg hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors cursor-pointer"
+              className="p-1.5 text-[#8C7B6E] hover:text-red-600 rounded-lg hover:bg-red-50 transition-colors cursor-pointer"
             >
               <Trash2 className="w-4 h-4" />
             </button>
@@ -453,7 +453,7 @@ export function NoteEditor({
             {/* Paper Sheet Container */}
             <div
               id="tiptap-editor-wrapper"
-              className="w-full max-w-[850px] min-h-[600px] bg-[#fefdfa] dark:bg-[#282421] border border-[#ded7c8] dark:border-[#38322b] rounded-xl shadow-xs p-6 sm:p-12 relative"
+              className="w-full max-w-[850px] min-h-[600px] bg-[#FFFFFF] border border-[#E3DCD2] rounded-xl shadow-xs p-6 sm:p-12 relative"
             >
               {/* Tiptap Canvas */}
               <EditorContent editor={editor} />
@@ -467,14 +467,14 @@ export function NoteEditor({
               />
 
               {/* Attachments Section */}
-              <div className="mt-12 pt-6 border-t border-[#eae8e3] dark:border-[#2f2d29]">
+              <div className="mt-12 pt-6 border-t border-[#E3DCD2]">
                 <div className="flex items-center justify-between mb-3">
-                  <span className="text-xs font-semibold tracking-wider text-[#7f756e] uppercase flex items-center gap-1.5">
-                    <Paperclip className="w-3.5 h-3.5 text-[#68594d]" /> Anexos e Mídia ({attachments.length})
+                  <span className="text-xs font-semibold tracking-wider text-[#8C7B6E] uppercase flex items-center gap-1.5">
+                    <Paperclip className="w-3.5 h-3.5 text-[#8C7B6E]" /> Anexos e Mídia ({attachments.length})
                   </span>
                   <label
                     htmlFor="file-upload-input"
-                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md bg-[#f5f3ee] dark:bg-[#2c2a26] hover:bg-[#eae8e3] dark:hover:bg-[#36342f] text-[#68594d] dark:text-[#d7c3b4] cursor-pointer transition-colors"
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded-md bg-[#E3DCD2] hover:bg-[#D9C5B2] text-[#8C7B6E] cursor-pointer transition-colors font-medium"
                   >
                     <Plus className="w-3.5 h-3.5" />
                     {isUploading ? 'Enviando...' : 'Adicionar Anexo'}
@@ -499,17 +499,17 @@ export function NoteEditor({
                       return (
                         <div
                           key={att.id}
-                          className="p-3 bg-[#f5f3ee] dark:bg-[#2c2a26] border border-[#d1c4bc] dark:border-[#44403a] rounded-lg text-xs flex flex-col gap-2"
+                          className="p-3 bg-[#F9F7F2] border border-[#E3DCD2] rounded-lg text-xs flex flex-col gap-2 text-[#3D352E]"
                         >
                           <div className="flex items-center justify-between gap-2">
                             <div className="flex items-center gap-2 truncate">
-                              {isAudio && <Music className="w-4 h-4 text-[#68594d] shrink-0" />}
-                              {isVideo && <Video className="w-4 h-4 text-[#68594d] shrink-0" />}
+                              {isAudio && <Music className="w-4 h-4 text-[#8C7B6E] shrink-0" />}
+                              {isVideo && <Video className="w-4 h-4 text-[#8C7B6E] shrink-0" />}
                               {isPdf && <FileText className="w-4 h-4 text-red-600 shrink-0" />}
-                              {!isAudio && !isVideo && !isPdf && <Paperclip className="w-4 h-4 text-[#68594d] shrink-0" />}
+                              {!isAudio && !isVideo && !isPdf && <Paperclip className="w-4 h-4 text-[#8C7B6E] shrink-0" />}
                               <span className="font-medium truncate">{att.fileName}</span>
                             </div>
-                            <span className="text-[10px] text-[#7f756e] shrink-0">
+                            <span className="text-[10px] text-[#8C7B6E]/70 shrink-0">
                               {(att.fileSize / 1024).toFixed(1)} KB
                             </span>
                           </div>
@@ -526,7 +526,7 @@ export function NoteEditor({
                               href={att.url}
                               target="_blank"
                               rel="noreferrer"
-                              className="inline-flex items-center gap-1 text-[11px] text-[#68594d] dark:text-[#d7c3b4] hover:underline"
+                              className="inline-flex items-center gap-1 text-[11px] text-[#8C7B6E] hover:underline"
                             >
                               <FileDown className="w-3.5 h-3.5" /> Abrir / Baixar Documento PDF
                             </a>
@@ -539,12 +539,12 @@ export function NoteEditor({
               </div>
 
               {/* Backlinks / "Referenciado por" Section */}
-              <div className="mt-8 pt-6 border-t border-[#eae8e3] dark:border-[#2f2d29]">
-                <div className="text-xs font-semibold tracking-wider text-[#7f756e] uppercase mb-2 flex items-center gap-1.5">
-                  <Link2 className="w-3.5 h-3.5 text-[#68594d]" /> Referenciado Por / Backlinks ({backlinks.length})
+              <div className="mt-8 pt-6 border-t border-[#E3DCD2]">
+                <div className="text-xs font-semibold tracking-wider text-[#8C7B6E] uppercase mb-2 flex items-center gap-1.5">
+                  <Link2 className="w-3.5 h-3.5 text-[#8C7B6E]" /> Referenciado Por / Backlinks ({backlinks.length})
                 </div>
                 {backlinks.length === 0 ? (
-                  <p className="text-xs text-[#7f756e] italic">
+                  <p className="text-xs text-[#8C7B6E]/70 italic">
                     Nenhuma outra nota faz referência a esta no momento. Use [[{node.name}]] em qualquer outra nota para criar uma conexão bilateral.
                   </p>
                 ) : (
@@ -553,13 +553,13 @@ export function NoteEditor({
                       <div
                         key={bl.noteId}
                         onClick={() => onNavigateToNote(bl.nodeId)}
-                        className="p-2.5 rounded-lg border border-[#d1c4bc] dark:border-[#44403a] hover:border-[#68594d] bg-[#f5f3ee] dark:bg-[#2c2a26] hover:bg-[#f4dfcb]/30 transition-colors cursor-pointer"
+                        className="p-2.5 rounded-lg border border-[#E3DCD2] hover:border-[#8C7B6E] bg-[#F9F7F2] hover:bg-[#E3DCD2]/40 transition-colors cursor-pointer"
                       >
-                        <div className="font-medium text-xs text-[#68594d] dark:text-[#d7c3b4]">
+                        <div className="font-medium text-xs text-[#8C7B6E]">
                           {bl.title}
                         </div>
                         {bl.snippet && (
-                          <div className="text-[11px] text-[#7f756e] mt-0.5 truncate font-serif italic">
+                          <div className="text-[11px] text-[#7A6B5F] mt-0.5 truncate font-serif italic">
                             &ldquo;{bl.snippet}&rdquo;
                           </div>
                         )}

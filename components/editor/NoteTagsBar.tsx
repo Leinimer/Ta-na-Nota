@@ -137,7 +137,7 @@ export function NoteTagsBar({
           type="button"
           id="btn-add-note-tag"
           onClick={() => setIsPopoverOpen((prev) => !prev)}
-          className="inline-flex items-center justify-center w-5 h-5 rounded-md bg-[#ede8dc] dark:bg-[#332d27] border border-[#ded8cb] dark:border-[#423b34] text-[#5c4e42] dark:text-[#ddd8ce] hover:bg-[#e3ddd0] dark:hover:bg-[#3d3730] transition-colors text-xs font-semibold cursor-pointer shadow-2xs"
+          className="inline-flex items-center justify-center w-5 h-5 rounded-md bg-[#E3DCD2] border border-[#D9C5B2] text-[#8C7B6E] hover:bg-[#D9C5B2] transition-colors text-xs font-semibold cursor-pointer shadow-2xs"
           title="Adicionar tag"
           aria-label="Adicionar tag"
         >
@@ -149,16 +149,16 @@ export function NoteTagsBar({
           <div
             ref={popoverRef}
             id="popover-add-tag"
-            className="absolute top-7 left-0 z-50 w-64 bg-[#fefdfa] dark:bg-[#282420] border border-[#ded8cb] dark:border-[#423b34] rounded-lg shadow-xl p-3 text-xs text-[#2d2621] dark:text-[#f5f2eb] animate-in fade-in zoom-in-95 duration-150"
+            className="absolute top-7 left-0 z-50 w-64 bg-[#FEFDFA] border border-[#E3DCD2] rounded-lg shadow-xl p-3 text-xs text-[#3D352E] animate-in fade-in zoom-in-95 duration-150"
           >
-            <div className="flex items-center justify-between pb-2 border-b border-[#ded8cb] dark:border-[#423b34] mb-2.5">
-              <span className="font-serif font-semibold text-[#4a3f35] dark:text-[#ddd8ce]">
+            <div className="flex items-center justify-between pb-2 border-b border-[#E3DCD2] mb-2.5">
+              <span className="font-serif font-semibold text-[#8C7B6E]">
                 Adicionar tag
               </span>
               <button
                 type="button"
                 onClick={() => setIsPopoverOpen(false)}
-                className="text-[#7a6e63] hover:text-[#2d2621] p-0.5 rounded cursor-pointer"
+                className="text-[#8C7B6E] hover:text-[#3D352E] p-0.5 rounded cursor-pointer"
               >
                 <X className="w-3.5 h-3.5" />
               </button>
@@ -166,7 +166,7 @@ export function NoteTagsBar({
 
             {/* Input with Search / Auto-hashtag */}
             <div className="relative flex items-center mb-2.5">
-              <span className="absolute left-2.5 text-[#7a6e63] font-mono text-xs select-none">
+              <span className="absolute left-2.5 text-[#8C7B6E] font-mono text-xs select-none">
                 #
               </span>
               <input
@@ -185,7 +185,7 @@ export function NoteTagsBar({
                   }
                 }}
                 placeholder="Digite uma tag..."
-                className="w-full pl-6 pr-2.5 py-1.5 text-xs bg-[#f1ede4] dark:bg-[#1d1a17] border border-[#ded8cb] dark:border-[#423b34] rounded-md outline-none focus:border-[#5c4e42] dark:focus:border-[#d2c5b5] font-mono placeholder:font-sans placeholder:text-[#7a6e63]"
+                className="w-full pl-6 pr-2.5 py-1.5 text-xs bg-[#FFFFFF] border border-[#E3DCD2] rounded-md outline-none focus:border-[#8C7B6E] font-mono placeholder:font-sans placeholder:text-[#8C7B6E]/60 text-[#3D352E]"
               />
             </div>
 
@@ -195,7 +195,7 @@ export function NoteTagsBar({
                 type="button"
                 disabled={loading}
                 onClick={() => handleAddTag(cleanQuery)}
-                className="w-full flex items-center gap-1.5 px-2.5 py-1.5 mb-2 rounded-md bg-[#ede8dc] dark:bg-[#332d27] hover:bg-[#e3ddd0] dark:hover:bg-[#3d3730] text-[#5c4e42] dark:text-[#ddd8ce] font-medium text-left cursor-pointer transition-colors"
+                className="w-full flex items-center gap-1.5 px-2.5 py-1.5 mb-2 rounded-md bg-[#E3DCD2] hover:bg-[#D9C5B2] text-[#8C7B6E] font-medium text-left cursor-pointer transition-colors"
               >
                 <Plus className="w-3.5 h-3.5 shrink-0" />
                 <span className="truncate">Criar nova tag: <strong className="font-mono">#{cleanQuery}</strong></span>
@@ -204,12 +204,12 @@ export function NoteTagsBar({
 
             {/* Existing user tags list */}
             <div>
-              <div className="text-[10px] font-semibold uppercase tracking-wider text-[#7a6e63] mb-1.5">
+              <div className="text-[10px] font-semibold uppercase tracking-wider text-[#8C7B6E] mb-1.5">
                 {cleanQuery ? 'Tags encontradas' : 'Tags existentes:'}
               </div>
 
               {filteredUserTags.length === 0 ? (
-                <div className="py-2 text-center text-[11px] text-[#7a6e63] italic">
+                <div className="py-2 text-center text-[11px] text-[#8C7B6E]/70 italic">
                   {cleanQuery ? 'Nenhuma tag correspondente.' : 'Nenhuma tag criada ainda.'}
                 </div>
               ) : (
@@ -229,13 +229,13 @@ export function NoteTagsBar({
                         }}
                         className={`w-full flex items-center justify-between px-2 py-1 rounded-md text-left transition-colors cursor-pointer ${
                           isAttached
-                            ? 'bg-[#e3ddd0] dark:bg-[#3d3730] text-[#4a3f35] dark:text-[#f5f2eb] font-medium'
-                            : 'hover:bg-[#f1ede4] dark:hover:bg-[#332d27] text-[#5c4e42] dark:text-[#ddd8ce]'
+                            ? 'bg-[#D9C5B2] text-[#3D352E] font-medium'
+                            : 'hover:bg-[#E3DCD2] text-[#3D352E]'
                         }`}
                       >
                         <span className="font-mono">#{tag.name}</span>
                         {isAttached && (
-                          <span className="flex items-center text-[10px] text-[#4a6b46] dark:text-[#7ba675]">
+                          <span className="flex items-center text-[10px] text-[#8C7B6E]">
                             <Check className="w-3 h-3" />
                           </span>
                         )}
@@ -253,7 +253,7 @@ export function NoteTagsBar({
       {noteTags.map((tag) => (
         <div
           key={tag.id}
-          className="group inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-mono bg-[#eee8db] dark:bg-[#37312a] text-[#5c4e42] dark:text-[#ded6c9] border border-[#ded8cb] dark:border-[#4a4239] transition-colors shadow-2xs"
+          className="group inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-xs font-mono bg-[#E3DCD2] text-[#8C7B6E] border border-[#D9C5B2] transition-colors shadow-2xs font-medium"
         >
           <button
             type="button"
@@ -269,7 +269,7 @@ export function NoteTagsBar({
               e.stopPropagation();
               handleRemoveTag(tag.id);
             }}
-            className="opacity-50 group-hover:opacity-100 hover:text-red-700 dark:hover:text-red-400 p-0.5 rounded transition-opacity cursor-pointer"
+            className="opacity-60 group-hover:opacity-100 hover:text-red-700 p-0.5 rounded transition-opacity cursor-pointer"
             title={`Remover #${tag.name} da nota`}
             aria-label={`Remover #${tag.name}`}
           >

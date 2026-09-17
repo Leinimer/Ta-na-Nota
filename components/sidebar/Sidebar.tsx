@@ -11,11 +11,8 @@ import {
   Clock,
   Tag as TagIcon,
   Download,
-  Moon,
-  Sun,
   User as UserIcon,
   Layers,
-  ChevronDown,
   CheckCircle2,
   RefreshCw,
   WifiOff,
@@ -28,8 +25,6 @@ interface SidebarProps {
   tags: TagRecord[];
   currentUser: AppUser | null;
   syncStatus: SyncStatus;
-  theme: 'light' | 'dark';
-  onToggleTheme: () => void;
   onOpenAuth: () => void;
   onOpenCommandPalette: () => void;
   onToggleExpand: (folderId: string) => void;
@@ -54,8 +49,6 @@ export function Sidebar({
   tags,
   currentUser,
   syncStatus,
-  theme,
-  onToggleTheme,
   onOpenAuth,
   onOpenCommandPalette,
   onToggleExpand,
@@ -116,31 +109,31 @@ export function Sidebar({
   return (
     <aside
       id="app-sidebar"
-      className="w-full h-full flex flex-col bg-[#f1ede4] dark:bg-[#1c1917] border-r border-[#ded7c8] dark:border-[#38322b] text-[#2d2621] dark:text-[#f5f2eb] select-none"
+      className="w-full h-full flex flex-col bg-[#F9F7F2] border-r border-[#E3DCD2] text-[#3D352E] select-none"
     >
       {/* 1. Header & Identity */}
-      <div className="p-3.5 border-b border-[#ded7c8] dark:border-[#38322b] flex items-center justify-between">
+      <div className="p-3.5 border-b border-[#E3DCD2] flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded-md bg-[#5c4e42] text-[#fefdfa] flex items-center justify-center font-serif font-bold text-sm shadow-xs">
+          <div className="w-7 h-7 rounded-md bg-[#8C7B6E] text-[#F9F7F2] flex items-center justify-center font-serif font-bold text-sm shadow-xs">
             T
           </div>
           <div>
-            <h1 className="font-serif font-semibold text-sm tracking-tight leading-none text-[#2d2621] dark:text-[#f5f2eb]">
+            <h1 className="font-serif font-semibold text-sm tracking-tight leading-none text-[#8C7B6E]">
               Tá na nota
             </h1>
             <div className="flex items-center gap-1.5 mt-0.5">
               {syncStatus === 'saving' && (
-                <span className="flex items-center gap-1 text-[10px] text-amber-700 dark:text-amber-400">
+                <span className="flex items-center gap-1 text-[10px] text-amber-700">
                   <RefreshCw className="w-2.5 h-2.5 animate-spin" /> Salvando...
                 </span>
               )}
               {syncStatus === 'saved' && (
-                <span className="flex items-center gap-1 text-[10px] text-emerald-700 dark:text-emerald-400">
+                <span className="flex items-center gap-1 text-[10px] text-emerald-700">
                   <CheckCircle2 className="w-2.5 h-2.5" /> Salvo
                 </span>
               )}
               {syncStatus === 'offline' && (
-                <span className="flex items-center gap-1 text-[10px] text-[#7d7064]">
+                <span className="flex items-center gap-1 text-[10px] text-[#8C7B6E]/70">
                   <WifiOff className="w-2.5 h-2.5" /> Local
                 </span>
               )}
@@ -150,18 +143,10 @@ export function Sidebar({
 
         <div className="flex items-center gap-1">
           <button
-            id="btn-toggle-theme"
-            title="Alternar Tema"
-            onClick={onToggleTheme}
-            className="p-1.5 text-[#7d7064] hover:text-[#2d2621] dark:hover:text-[#ffffff] rounded-md hover:bg-[#e4ddcf] dark:hover:bg-[#2c2824] transition-colors"
-          >
-            {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-          </button>
-          <button
             id="btn-open-user-profile"
             title="Conta & Sincronização"
             onClick={onOpenAuth}
-            className="p-1.5 text-[#7d7064] hover:text-[#2d2621] dark:hover:text-[#ffffff] rounded-md hover:bg-[#e4ddcf] dark:hover:bg-[#2c2824] transition-colors"
+            className="p-1.5 text-[#8C7B6E] hover:text-[#3D352E] rounded-md hover:bg-[#E3DCD2] transition-colors cursor-pointer"
           >
             <UserIcon className="w-4 h-4" />
           </button>
@@ -169,16 +154,16 @@ export function Sidebar({
       </div>
 
       {/* 2. Search & Command Palette Trigger */}
-      <div className="p-3 border-b border-[#ded7c8] dark:border-[#38322b]">
+      <div className="p-3 border-b border-[#E3DCD2]">
         <div
           onClick={onOpenCommandPalette}
-          className="w-full flex items-center justify-between px-2.5 py-1.5 bg-[#fefdfa] dark:bg-[#282421] border border-[#ded7c8] dark:border-[#443e37] rounded-lg text-xs text-[#7d7064] hover:border-[#5c4e42] transition-colors cursor-pointer shadow-2xs"
+          className="w-full flex items-center justify-between px-2.5 py-1.5 bg-[#FEFDFA] border border-[#E3DCD2] rounded-lg text-xs text-[#8C7B6E] hover:border-[#8C7B6E] transition-colors cursor-pointer shadow-2xs"
         >
           <div className="flex items-center gap-2">
-            <Search className="w-3.5 h-3.5 text-[#7d7064]" />
-            <span>Buscar notas, tags...</span>
+            <Search className="w-3.5 h-3.5 text-[#8C7B6E]" />
+            <span className="text-[#8C7B6E]/80">Buscar notas, tags...</span>
           </div>
-          <kbd className="px-1.5 py-0.5 text-[10px] bg-[#ede7dc] dark:bg-[#332d28] rounded border border-[#ded7c8] dark:border-[#443e37] text-[#7d7064] font-mono">
+          <kbd className="px-1.5 py-0.5 text-[10px] bg-[#E3DCD2] rounded border border-[#D9C5B2] text-[#8C7B6E] font-mono">
             ⌘K
           </kbd>
         </div>
@@ -191,10 +176,10 @@ export function Sidebar({
             setActiveTab('tree');
             setSearchQuery('');
           }}
-          className={`py-1.5 px-2 rounded-md font-medium flex items-center justify-center gap-1 transition-all ${
+          className={`py-1.5 px-2 rounded-md font-medium flex items-center justify-center gap-1 transition-all cursor-pointer ${
             activeTab === 'tree'
-              ? 'bg-[#edd9c4] dark:bg-[#3c3328] text-[#5c4e42] dark:text-[#dfd5c8] shadow-2xs'
-              : 'text-[#7d7064] hover:bg-[#e4ddcf] dark:hover:bg-[#2c2824]'
+              ? 'bg-[#D9C5B2] text-[#3D352E] shadow-2xs'
+              : 'text-[#8C7B6E] hover:bg-[#E3DCD2]'
           }`}
           title="Árvore de Pastas"
         >
@@ -207,10 +192,10 @@ export function Sidebar({
             setActiveTab('favorites');
             setSearchQuery('');
           }}
-          className={`py-1.5 px-2 rounded-md font-medium flex items-center justify-center gap-1 transition-all ${
+          className={`py-1.5 px-2 rounded-md font-medium flex items-center justify-center gap-1 transition-all cursor-pointer ${
             activeTab === 'favorites'
-              ? 'bg-[#f4dfcb] dark:bg-[#3c3328] text-[#68594d] dark:text-[#d7c3b4] shadow-2xs'
-              : 'text-[#7f756e] hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26]'
+              ? 'bg-[#D9C5B2] text-[#3D352E] shadow-2xs'
+              : 'text-[#8C7B6E] hover:bg-[#E3DCD2]'
           }`}
           title="Favoritos"
         >
@@ -223,10 +208,10 @@ export function Sidebar({
             setActiveTab('recent');
             setSearchQuery('');
           }}
-          className={`py-1.5 px-2 rounded-md font-medium flex items-center justify-center gap-1 transition-all ${
+          className={`py-1.5 px-2 rounded-md font-medium flex items-center justify-center gap-1 transition-all cursor-pointer ${
             activeTab === 'recent'
-              ? 'bg-[#f4dfcb] dark:bg-[#3c3328] text-[#68594d] dark:text-[#d7c3b4] shadow-2xs'
-              : 'text-[#7f756e] hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26]'
+              ? 'bg-[#D9C5B2] text-[#3D352E] shadow-2xs'
+              : 'text-[#8C7B6E] hover:bg-[#E3DCD2]'
           }`}
           title="Recentes"
         >
@@ -239,10 +224,10 @@ export function Sidebar({
             setActiveTab('tags');
             setSearchQuery('');
           }}
-          className={`py-1.5 px-2 rounded-md font-medium flex items-center justify-center gap-1 transition-all ${
+          className={`py-1.5 px-2 rounded-md font-medium flex items-center justify-center gap-1 transition-all cursor-pointer ${
             activeTab === 'tags'
-              ? 'bg-[#f4dfcb] dark:bg-[#3c3328] text-[#68594d] dark:text-[#d7c3b4] shadow-2xs'
-              : 'text-[#7f756e] hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26]'
+              ? 'bg-[#D9C5B2] text-[#3D352E] shadow-2xs'
+              : 'text-[#8C7B6E] hover:bg-[#E3DCD2]'
           }`}
           title="Etiquetas e Tags"
         >
@@ -256,15 +241,15 @@ export function Sidebar({
         <button
           id="btn-sidebar-create-folder"
           onClick={() => onCreateFolder(null)}
-          className="flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-md border border-[#d1c4bc] dark:border-[#44403a] bg-[#ffffff] dark:bg-[#282724] hover:bg-[#eae8e3] dark:hover:bg-[#36342f] text-xs font-medium text-[#1b1c19] dark:text-[#f2f1ec] transition-colors cursor-pointer"
+          className="flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-md border border-[#E3DCD2] bg-[#FEFDFA] hover:bg-[#E3DCD2] text-xs font-medium text-[#3D352E] transition-colors cursor-pointer"
         >
-          <FolderPlus className="w-3.5 h-3.5 text-[#68594d] dark:text-[#d7c3b4]" />
+          <FolderPlus className="w-3.5 h-3.5 text-[#8C7B6E]" />
           <span>Nova Pasta</span>
         </button>
         <button
           id="btn-sidebar-create-note"
           onClick={() => onCreateNote(null)}
-          className="flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-md bg-[#68594d] hover:bg-[#574a3f] text-white text-xs font-medium transition-colors cursor-pointer shadow-xs"
+          className="flex items-center justify-center gap-1.5 py-1.5 px-2 rounded-md bg-[#8C7B6E] hover:bg-[#796A5E] text-white text-xs font-medium transition-colors cursor-pointer shadow-xs"
         >
           <FilePlus className="w-3.5 h-3.5" />
           <span>Nova Nota</span>
@@ -281,13 +266,13 @@ export function Sidebar({
         onDragLeave={() => setIsRootDragOver(false)}
         onDrop={handleRootDrop}
         className={`flex-1 overflow-y-auto px-2 py-1 custom-scrollbar ${
-          isRootDragOver ? 'bg-[#f4dfcb]/30 ring-2 ring-dashed ring-[#68594d]' : ''
+          isRootDragOver ? 'bg-[#D9C5B2]/30 ring-2 ring-dashed ring-[#8C7B6E]' : ''
         }`}
       >
         {/* Filtered Search Results */}
         {filteredNotes && (
           <div className="space-y-1">
-            <div className="px-2 py-1 text-[11px] font-semibold tracking-wider text-[#7f756e] uppercase">
+            <div className="px-2 py-1 text-[11px] font-semibold tracking-wider text-[#8C7B6E] uppercase">
               Resultados da busca ({filteredNotes.length})
             </div>
             {filteredNotes.map((note) => (
@@ -299,11 +284,11 @@ export function Sidebar({
                 }}
                 className={`flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs cursor-pointer transition-colors ${
                   activeNodeId === note.id
-                    ? 'bg-[#f4dfcb] dark:bg-[#3c3328] font-medium text-[#68594d] dark:text-[#d7c3b4]'
-                    : 'hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26]'
+                    ? 'bg-[#D9C5B2] font-medium text-[#3D352E]'
+                    : 'hover:bg-[#E3DCD2] text-[#3D352E]'
                 }`}
               >
-                <span className="w-2 h-2 rounded-full bg-[#68594d]" />
+                <span className="w-2 h-2 rounded-full bg-[#8C7B6E]" />
                 <span className="truncate">{note.name}</span>
               </div>
             ))}
@@ -314,7 +299,7 @@ export function Sidebar({
         {!filteredNotes && activeTab === 'tree' && (
           <div className="space-y-0.5">
             {tree.length === 0 ? (
-              <div className="py-8 text-center text-xs text-[#7f756e] italic">
+              <div className="py-8 text-center text-xs text-[#8C7B6E]/70 italic">
                 Nenhuma pasta ou nota criada ainda.
               </div>
             ) : (
@@ -347,11 +332,11 @@ export function Sidebar({
         {/* Tab 2: Favorites */}
         {!filteredNotes && activeTab === 'favorites' && (
           <div className="space-y-1">
-            <div className="px-2 py-1 text-[11px] font-semibold tracking-wider text-[#7f756e] uppercase">
+            <div className="px-2 py-1 text-[11px] font-semibold tracking-wider text-[#8C7B6E] uppercase">
               Notas Favoritas
             </div>
             {favoriteNotes.length === 0 ? (
-              <div className="py-6 text-center text-xs text-[#7f756e] italic">
+              <div className="py-6 text-center text-xs text-[#8C7B6E]/70 italic">
                 Nenhuma nota favoritada. Clique na estrela em qualquer nota para fixá-la aqui.
               </div>
             ) : (
@@ -364,8 +349,8 @@ export function Sidebar({
                   }}
                   className={`flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs cursor-pointer transition-colors ${
                     activeNodeId === note.id
-                      ? 'bg-[#f4dfcb] dark:bg-[#3c3328] font-medium text-[#68594d] dark:text-[#d7c3b4]'
-                      : 'hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26]'
+                      ? 'bg-[#D9C5B2] font-medium text-[#3D352E]'
+                      : 'hover:bg-[#E3DCD2] text-[#3D352E]'
                   }`}
                 >
                   <span className="truncate">{note.name}</span>
@@ -379,11 +364,11 @@ export function Sidebar({
         {/* Tab 3: Recents */}
         {!filteredNotes && activeTab === 'recent' && (
           <div className="space-y-1">
-            <div className="px-2 py-1 text-[11px] font-semibold tracking-wider text-[#7f756e] uppercase">
+            <div className="px-2 py-1 text-[11px] font-semibold tracking-wider text-[#8C7B6E] uppercase">
               Abertas Recentemente
             </div>
             {recentNotes.length === 0 ? (
-              <div className="py-6 text-center text-xs text-[#7f756e] italic">
+              <div className="py-6 text-center text-xs text-[#8C7B6E]/70 italic">
                 Nenhuma nota visualizada recentemente.
               </div>
             ) : (
@@ -396,12 +381,12 @@ export function Sidebar({
                   }}
                   className={`flex items-center justify-between px-2.5 py-1.5 rounded-md text-xs cursor-pointer transition-colors ${
                     activeNodeId === note.id
-                      ? 'bg-[#f4dfcb] dark:bg-[#3c3328] font-medium text-[#68594d] dark:text-[#d7c3b4]'
-                      : 'hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26]'
+                      ? 'bg-[#D9C5B2] font-medium text-[#3D352E]'
+                      : 'hover:bg-[#E3DCD2] text-[#3D352E]'
                   }`}
                 >
                   <span className="truncate">{note.name}</span>
-                  <span className="text-[10px] text-[#7f756e]">
+                  <span className="text-[10px] text-[#8C7B6E]">
                     {note.lastOpenedAt ? new Date(note.lastOpenedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''}
                   </span>
                 </div>
@@ -413,11 +398,11 @@ export function Sidebar({
         {/* Tab 4: Tags */}
         {!filteredNotes && activeTab === 'tags' && (
           <div className="space-y-2 p-1">
-            <div className="px-1 py-1 text-[11px] font-semibold tracking-wider text-[#7f756e] uppercase">
+            <div className="px-1 py-1 text-[11px] font-semibold tracking-wider text-[#8C7B6E] uppercase">
               Etiquetas do Sistema ({tags.length})
             </div>
             {tags.length === 0 ? (
-              <div className="py-6 text-center text-xs text-[#7f756e] italic">
+              <div className="py-6 text-center text-xs text-[#8C7B6E]/70 italic">
                 Nenhuma tag encontrada. Digite #tag no texto da nota para criar tags automaticamente.
               </div>
             ) : (
@@ -428,11 +413,11 @@ export function Sidebar({
                     onClick={() => {
                       if (onFilterByTag) onFilterByTag(tag.id);
                     }}
-                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs bg-[#ffffff] dark:bg-[#282724] border border-[#d1c4bc] dark:border-[#44403a] hover:border-[#68594d] hover:bg-[#f4dfcb]/30 transition-colors"
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs bg-[#E3DCD2] border border-[#D9C5B2] hover:bg-[#D9C5B2] transition-colors cursor-pointer"
                   >
-                    <span className="font-mono text-[#68594d] dark:text-[#d7c3b4]">#{tag.name}</span>
+                    <span className="font-mono text-[#8C7B6E] font-medium">#{tag.name}</span>
                     {typeof tag.count === 'number' && (
-                      <span className="text-[10px] text-[#7f756e] bg-[#eae8e3] dark:bg-[#36342f] px-1 rounded-full">
+                      <span className="text-[10px] text-[#8C7B6E] bg-[#D9C5B2]/60 px-1 rounded">
                         {tag.count}
                       </span>
                     )}
@@ -445,17 +430,17 @@ export function Sidebar({
       </div>
 
       {/* 6. Footer: Export & Local Storage status */}
-      <div className="p-3 border-t border-[#eae8e3] dark:border-[#2f2d29] flex items-center justify-between text-xs text-[#7f756e]">
+      <div className="p-3 border-t border-[#E3DCD2] flex items-center justify-between text-xs text-[#8C7B6E]">
         <button
           id="btn-sidebar-export-all"
           onClick={onExportAll}
           title="Exportar todas as pastas e notas em arquivo ZIP"
-          className="flex items-center gap-1.5 hover:text-[#1b1c19] dark:hover:text-[#ffffff] transition-colors cursor-pointer"
+          className="flex items-center gap-1.5 hover:text-[#3D352E] transition-colors cursor-pointer"
         >
           <Download className="w-3.5 h-3.5" />
           <span>Exportar Tudo (.ZIP)</span>
         </button>
-        <span className="text-[10px] font-mono text-[#7f756e]/80">v1.0</span>
+        <span className="text-[10px] font-mono text-[#8C7B6E]/70">v1.0</span>
       </div>
     </aside>
   );

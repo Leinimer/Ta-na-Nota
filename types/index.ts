@@ -86,4 +86,3 @@ export interface SearchResults {
 }
 
 export type SyncStatus = 'saved' | 'saving' | 'offline' | 'error';
-export type ThemeMode = 'light' | 'dark' | 'system';

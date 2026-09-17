@@ -70,17 +70,17 @@ export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps
   return (
     <div
       id="editor-docked-toolbar"
-      className="sticky top-0 z-20 flex flex-wrap items-center gap-0.5 px-3 py-1.5 bg-[#fbf9f4]/95 dark:bg-[#191816]/95 backdrop-blur-md border-b border-[#eae8e3] dark:border-[#2f2d29] text-[#1b1c19] dark:text-[#f2f1ec] text-xs"
+      className="sticky top-0 z-20 flex flex-wrap items-center gap-0.5 px-3 py-1.5 bg-[#F9F7F2]/95 backdrop-blur-md border-b border-[#E3DCD2] text-[#3D352E] text-xs"
     >
       {/* Headings */}
       <button
         type="button"
         title="Título 1"
         onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
-        className={`p-1.5 rounded-md transition-colors ${
+        className={`p-1.5 rounded-md transition-colors cursor-pointer ${
           editor.isActive('heading', { level: 1 })
-            ? 'bg-[#68594d] text-white'
-            : 'hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] text-[#7f756e]'
+            ? 'bg-[#D9C5B2] text-[#3D352E] font-medium'
+            : 'hover:bg-[#E3DCD2] text-[#8C7B6E]'
         }`}
       >
         <Heading1 className="w-3.5 h-3.5" />
@@ -90,10 +90,10 @@ export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps
         type="button"
         title="Título 2"
         onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
-        className={`p-1.5 rounded-md transition-colors ${
+        className={`p-1.5 rounded-md transition-colors cursor-pointer ${
           editor.isActive('heading', { level: 2 })
-            ? 'bg-[#68594d] text-white'
-            : 'hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] text-[#7f756e]'
+            ? 'bg-[#D9C5B2] text-[#3D352E] font-medium'
+            : 'hover:bg-[#E3DCD2] text-[#8C7B6E]'
         }`}
       >
         <Heading2 className="w-3.5 h-3.5" />
@@ -103,26 +103,26 @@ export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps
         type="button"
         title="Título 3"
         onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
-        className={`p-1.5 rounded-md transition-colors ${
+        className={`p-1.5 rounded-md transition-colors cursor-pointer ${
           editor.isActive('heading', { level: 3 })
-            ? 'bg-[#68594d] text-white'
-            : 'hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] text-[#7f756e]'
+            ? 'bg-[#D9C5B2] text-[#3D352E] font-medium'
+            : 'hover:bg-[#E3DCD2] text-[#8C7B6E]'
         }`}
       >
         <Heading3 className="w-3.5 h-3.5" />
       </button>
 
-      <div className="w-px h-4 bg-[#d1c4bc] dark:bg-[#44403a] mx-1" />
+      <div className="w-px h-4 bg-[#E3DCD2] mx-1" />
 
       {/* Formatting Marks */}
       <button
         type="button"
         title="Negrito (Ctrl+B)"
         onClick={() => editor.chain().focus().toggleBold().run()}
-        className={`p-1.5 rounded-md transition-colors ${
+        className={`p-1.5 rounded-md transition-colors cursor-pointer ${
           editor.isActive('bold')
-            ? 'bg-[#68594d] text-white'
-            : 'hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] text-[#7f756e]'
+            ? 'bg-[#D9C5B2] text-[#3D352E] font-medium'
+            : 'hover:bg-[#E3DCD2] text-[#8C7B6E]'
         }`}
       >
         <Bold className="w-3.5 h-3.5" />
@@ -132,10 +132,10 @@ export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps
         type="button"
         title="Itálico (Ctrl+I)"
         onClick={() => editor.chain().focus().toggleItalic().run()}
-        className={`p-1.5 rounded-md transition-colors ${
+        className={`p-1.5 rounded-md transition-colors cursor-pointer ${
           editor.isActive('italic')
-            ? 'bg-[#68594d] text-white'
-            : 'hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] text-[#7f756e]'
+            ? 'bg-[#D9C5B2] text-[#3D352E] font-medium'
+            : 'hover:bg-[#E3DCD2] text-[#8C7B6E]'
         }`}
       >
         <Italic className="w-3.5 h-3.5" />
@@ -145,10 +145,10 @@ export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps
         type="button"
         title="Sublinhado (Ctrl+U)"
         onClick={() => editor.chain().focus().toggleUnderline().run()}
-        className={`p-1.5 rounded-md transition-colors ${
+        className={`p-1.5 rounded-md transition-colors cursor-pointer ${
           editor.isActive('underline')
-            ? 'bg-[#68594d] text-white'
-            : 'hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] text-[#7f756e]'
+            ? 'bg-[#D9C5B2] text-[#3D352E] font-medium'
+            : 'hover:bg-[#E3DCD2] text-[#8C7B6E]'
         }`}
       >
         <UnderlineIcon className="w-3.5 h-3.5" />
@@ -158,10 +158,10 @@ export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps
         type="button"
         title="Tachado"
         onClick={() => editor.chain().focus().toggleStrike().run()}
-        className={`p-1.5 rounded-md transition-colors ${
+        className={`p-1.5 rounded-md transition-colors cursor-pointer ${
           editor.isActive('strike')
-            ? 'bg-[#68594d] text-white'
-            : 'hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] text-[#7f756e]'
+            ? 'bg-[#D9C5B2] text-[#3D352E] font-medium'
+            : 'hover:bg-[#E3DCD2] text-[#8C7B6E]'
         }`}
       >
         <Strikethrough className="w-3.5 h-3.5" />
@@ -170,27 +170,27 @@ export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps
       <button
         type="button"
         title="Destacar Texto"
-        onClick={() => editor.chain().focus().toggleHighlight({ color: '#ffe699' }).run()}
-        className={`p-1.5 rounded-md transition-colors ${
+        onClick={() => editor.chain().focus().toggleHighlight({ color: '#D9C5B2' }).run()}
+        className={`p-1.5 rounded-md transition-colors cursor-pointer ${
           editor.isActive('highlight')
-            ? 'bg-amber-400 text-amber-950'
-            : 'hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] text-[#7f756e]'
+            ? 'bg-[#D9C5B2] text-[#3D352E] font-medium'
+            : 'hover:bg-[#E3DCD2] text-[#8C7B6E]'
         }`}
       >
         <Highlighter className="w-3.5 h-3.5" />
       </button>
 
-      <div className="w-px h-4 bg-[#d1c4bc] dark:bg-[#44403a] mx-1" />
+      <div className="w-px h-4 bg-[#E3DCD2] mx-1" />
 
       {/* Lists & Tasks */}
       <button
         type="button"
         title="Checklist / Tarefas"
         onClick={() => editor.chain().focus().toggleTaskList().run()}
-        className={`p-1.5 rounded-md transition-colors ${
+        className={`p-1.5 rounded-md transition-colors cursor-pointer ${
           editor.isActive('taskList')
-            ? 'bg-[#68594d] text-white'
-            : 'hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] text-[#7f756e]'
+            ? 'bg-[#D9C5B2] text-[#3D352E] font-medium'
+            : 'hover:bg-[#E3DCD2] text-[#8C7B6E]'
         }`}
       >
         <CheckSquare className="w-3.5 h-3.5" />
@@ -200,10 +200,10 @@ export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps
         type="button"
         title="Lista com Marcadores"
         onClick={() => editor.chain().focus().toggleBulletList().run()}
-        className={`p-1.5 rounded-md transition-colors ${
+        className={`p-1.5 rounded-md transition-colors cursor-pointer ${
           editor.isActive('bulletList')
-            ? 'bg-[#68594d] text-white'
-            : 'hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] text-[#7f756e]'
+            ? 'bg-[#D9C5B2] text-[#3D352E] font-medium'
+            : 'hover:bg-[#E3DCD2] text-[#8C7B6E]'
         }`}
       >
         <List className="w-3.5 h-3.5" />
@@ -213,10 +213,10 @@ export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps
         type="button"
         title="Lista Numerada"
         onClick={() => editor.chain().focus().toggleOrderedList().run()}
-        className={`p-1.5 rounded-md transition-colors ${
+        className={`p-1.5 rounded-md transition-colors cursor-pointer ${
           editor.isActive('orderedList')
-            ? 'bg-[#68594d] text-white'
-            : 'hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] text-[#7f756e]'
+            ? 'bg-[#D9C5B2] text-[#3D352E] font-medium'
+            : 'hover:bg-[#E3DCD2] text-[#8C7B6E]'
         }`}
       >
         <ListOrdered className="w-3.5 h-3.5" />
@@ -226,10 +226,10 @@ export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps
         type="button"
         title="Citação"
         onClick={() => editor.chain().focus().toggleBlockquote().run()}
-        className={`p-1.5 rounded-md transition-colors ${
+        className={`p-1.5 rounded-md transition-colors cursor-pointer ${
           editor.isActive('blockquote')
-            ? 'bg-[#68594d] text-white'
-            : 'hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] text-[#7f756e]'
+            ? 'bg-[#D9C5B2] text-[#3D352E] font-medium'
+            : 'hover:bg-[#E3DCD2] text-[#8C7B6E]'
         }`}
       >
         <Quote className="w-3.5 h-3.5" />
@@ -239,16 +239,16 @@ export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps
         type="button"
         title="Bloco de Código"
         onClick={() => editor.chain().focus().toggleCodeBlock().run()}
-        className={`p-1.5 rounded-md transition-colors ${
+        className={`p-1.5 rounded-md transition-colors cursor-pointer ${
           editor.isActive('codeBlock')
-            ? 'bg-[#68594d] text-white'
-            : 'hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] text-[#7f756e]'
+            ? 'bg-[#D9C5B2] text-[#3D352E] font-medium'
+            : 'hover:bg-[#E3DCD2] text-[#8C7B6E]'
         }`}
       >
         <Code className="w-3.5 h-3.5" />
       </button>
 
-      <div className="w-px h-4 bg-[#d1c4bc] dark:bg-[#44403a] mx-1" />
+      <div className="w-px h-4 bg-[#E3DCD2] mx-1" />
 
       {/* Table controls */}
       <div className="relative">
@@ -262,41 +262,41 @@ export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps
               setShowTableMenu(!showTableMenu);
             }
           }}
-          className={`p-1.5 rounded-md transition-colors ${
+          className={`p-1.5 rounded-md transition-colors cursor-pointer ${
             editor.isActive('table')
-              ? 'bg-[#f4dfcb] dark:bg-[#3c3328] text-[#68594d] dark:text-[#d7c3b4]'
-              : 'hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] text-[#7f756e]'
+              ? 'bg-[#D9C5B2] text-[#3D352E] font-medium'
+              : 'hover:bg-[#E3DCD2] text-[#8C7B6E]'
           }`}
         >
           <TableIcon className="w-3.5 h-3.5" />
         </button>
 
         {showTableMenu && editor.isActive('table') && (
-          <div className="absolute top-full left-0 mt-1 z-30 w-44 bg-[#ffffff] dark:bg-[#23221e] border border-[#d1c4bc] dark:border-[#44403a] rounded-lg shadow-lg py-1 text-xs">
+          <div className="absolute top-full left-0 mt-1 z-30 w-44 bg-[#FEFDFA] border border-[#E3DCD2] rounded-lg shadow-lg py-1 text-xs">
             <button
               onClick={() => {
                 editor.chain().focus().addRowAfter().run();
                 setShowTableMenu(false);
               }}
-              className="w-full text-left px-3 py-1.5 hover:bg-[#f5f3ee] dark:hover:bg-[#2c2a26] flex items-center gap-2"
+              className="w-full text-left px-3 py-1.5 hover:bg-[#E3DCD2] flex items-center gap-2 cursor-pointer text-[#3D352E]"
             >
-              <Rows className="w-3 h-3" /> Adicionar Linha
+              <Rows className="w-3 h-3 text-[#8C7B6E]" /> Adicionar Linha
             </button>
             <button
               onClick={() => {
                 editor.chain().focus().addColumnAfter().run();
                 setShowTableMenu(false);
               }}
-              className="w-full text-left px-3 py-1.5 hover:bg-[#f5f3ee] dark:hover:bg-[#2c2a26] flex items-center gap-2"
+              className="w-full text-left px-3 py-1.5 hover:bg-[#E3DCD2] flex items-center gap-2 cursor-pointer text-[#3D352E]"
             >
-              <Columns className="w-3 h-3" /> Adicionar Coluna
+              <Columns className="w-3 h-3 text-[#8C7B6E]" /> Adicionar Coluna
             </button>
             <button
               onClick={() => {
                 editor.chain().focus().deleteRow().run();
                 setShowTableMenu(false);
               }}
-              className="w-full text-left px-3 py-1.5 hover:bg-[#f5f3ee] dark:hover:bg-[#2c2a26] flex items-center gap-2 text-red-600"
+              className="w-full text-left px-3 py-1.5 hover:bg-red-50 flex items-center gap-2 text-red-600 cursor-pointer"
             >
               <Trash2 className="w-3 h-3" /> Excluir Linha
             </button>
@@ -305,7 +305,7 @@ export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps
                 editor.chain().focus().deleteColumn().run();
                 setShowTableMenu(false);
               }}
-              className="w-full text-left px-3 py-1.5 hover:bg-[#f5f3ee] dark:hover:bg-[#2c2a26] flex items-center gap-2 text-red-600"
+              className="w-full text-left px-3 py-1.5 hover:bg-red-50 flex items-center gap-2 text-red-600 cursor-pointer"
             >
               <Trash2 className="w-3 h-3" /> Excluir Coluna
             </button>
@@ -314,7 +314,7 @@ export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps
                 editor.chain().focus().deleteTable().run();
                 setShowTableMenu(false);
               }}
-              className="w-full text-left px-3 py-1.5 hover:bg-[#f5f3ee] dark:hover:bg-[#2c2a26] flex items-center gap-2 text-red-600 border-t border-[#eae8e3] dark:border-[#2f2d29]"
+              className="w-full text-left px-3 py-1.5 hover:bg-red-50 flex items-center gap-2 text-red-600 border-t border-[#E3DCD2] cursor-pointer"
             >
               <Trash2 className="w-3 h-3" /> Remover Tabela
             </button>
@@ -327,10 +327,10 @@ export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps
         type="button"
         title="Inserir Link"
         onClick={setLink}
-        className={`p-1.5 rounded-md transition-colors ${
+        className={`p-1.5 rounded-md transition-colors cursor-pointer ${
           editor.isActive('link')
-            ? 'bg-[#68594d] text-white'
-            : 'hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] text-[#7f756e]'
+            ? 'bg-[#D9C5B2] text-[#3D352E] font-medium'
+            : 'hover:bg-[#E3DCD2] text-[#8C7B6E]'
         }`}
       >
         <LinkIcon className="w-3.5 h-3.5" />
@@ -340,7 +340,7 @@ export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps
         type="button"
         title="Inserir Imagem por URL"
         onClick={addImage}
-        className="p-1.5 rounded-md hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] text-[#7f756e] transition-colors"
+        className="p-1.5 rounded-md hover:bg-[#E3DCD2] text-[#8C7B6E] transition-colors cursor-pointer"
       >
         <ImageIcon className="w-3.5 h-3.5" />
       </button>
@@ -349,7 +349,7 @@ export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps
         type="button"
         title="Inserir Vídeo do YouTube"
         onClick={addYoutube}
-        className="p-1.5 rounded-md hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] text-[#7f756e] transition-colors"
+        className="p-1.5 rounded-md hover:bg-[#E3DCD2] text-[#8C7B6E] transition-colors cursor-pointer"
       >
         <Youtube className="w-3.5 h-3.5" />
       </button>
@@ -358,7 +358,7 @@ export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps
         type="button"
         title="Equação Matemática LaTeX"
         onClick={() => editor.chain().focus().setCodeBlock({ language: 'latex' }).run()}
-        className="p-1.5 rounded-md hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] text-[#7f756e] transition-colors"
+        className="p-1.5 rounded-md hover:bg-[#E3DCD2] text-[#8C7B6E] transition-colors cursor-pointer"
       >
         <Sigma className="w-3.5 h-3.5" />
       </button>
@@ -367,7 +367,7 @@ export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps
         type="button"
         title="Linha Divisória"
         onClick={() => editor.chain().focus().setHorizontalRule().run()}
-        className="p-1.5 rounded-md hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] text-[#7f756e] transition-colors"
+        className="p-1.5 rounded-md hover:bg-[#E3DCD2] text-[#8C7B6E] transition-colors cursor-pointer"
       >
         <Minus className="w-3.5 h-3.5" />
       </button>
@@ -381,7 +381,7 @@ export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps
           title="Desfazer (Ctrl+Z)"
           disabled={!editor.can().undo()}
           onClick={() => editor.chain().focus().undo().run()}
-          className="p-1.5 rounded-md hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] text-[#7f756e] disabled:opacity-30 transition-colors"
+          className="p-1.5 rounded-md hover:bg-[#E3DCD2] text-[#8C7B6E] disabled:opacity-30 transition-colors cursor-pointer"
         >
           <Undo2 className="w-3.5 h-3.5" />
         </button>
@@ -390,7 +390,7 @@ export function EditorToolbar({ editor, onInsertAttachment }: EditorToolbarProps
           title="Refazer (Ctrl+Y)"
           disabled={!editor.can().redo()}
           onClick={() => editor.chain().focus().redo().run()}
-          className="p-1.5 rounded-md hover:bg-[#eae8e3] dark:hover:bg-[#2c2a26] text-[#7f756e] disabled:opacity-30 transition-colors"
+          className="p-1.5 rounded-md hover:bg-[#E3DCD2] text-[#8C7B6E] disabled:opacity-30 transition-colors cursor-pointer"
         >
           <Redo2 className="w-3.5 h-3.5" />
         </button>

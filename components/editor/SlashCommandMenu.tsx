@@ -194,9 +194,9 @@ export function SlashCommandMenu({ editor, isOpen, onClose, position }: SlashCom
           top: `${position.top}px`,
           left: `${position.left}px`,
         }}
-        className="fixed z-50 w-72 max-h-80 overflow-y-auto bg-[#ffffff] dark:bg-[#23221e] border border-[#d1c4bc] dark:border-[#44403a] rounded-xl shadow-2xl p-1.5 custom-scrollbar text-[#1b1c19] dark:text-[#f2f1ec] animate-in fade-in zoom-in-95 duration-100"
+        className="fixed z-50 w-72 max-h-80 overflow-y-auto bg-[#FEFDFA] border border-[#E3DCD2] rounded-xl shadow-2xl p-1.5 custom-scrollbar text-[#3D352E] animate-in fade-in zoom-in-95 duration-100"
       >
-        <div className="px-2 py-1.5 mb-1 border-b border-[#eae8e3] dark:border-[#2f2d29]">
+        <div className="px-2 py-1.5 mb-1 border-b border-[#E3DCD2]">
           <input
             type="text"
             autoFocus
@@ -206,13 +206,13 @@ export function SlashCommandMenu({ editor, isOpen, onClose, position }: SlashCom
               setSelectedIndex(0);
             }}
             placeholder="Filtrar blocos..."
-            className="w-full bg-transparent text-xs outline-none placeholder:text-[#7f756e]"
+            className="w-full bg-transparent text-xs outline-none placeholder:text-[#8C7B6E]/60 text-[#3D352E]"
           />
         </div>
 
         <div className="space-y-0.5">
           {filtered.length === 0 ? (
-            <div className="px-3 py-4 text-xs text-center text-[#7f756e] italic">
+            <div className="px-3 py-4 text-xs text-center text-[#8C7B6E]/70 italic">
               Nenhum bloco encontrado
             </div>
           ) : (
@@ -229,24 +229,24 @@ export function SlashCommandMenu({ editor, isOpen, onClose, position }: SlashCom
                     }
                   }}
                   onMouseEnter={() => setSelectedIndex(idx)}
-                  className={`w-full text-left px-2.5 py-2 rounded-lg flex items-center gap-2.5 transition-colors ${
+                  className={`w-full text-left px-2.5 py-2 rounded-lg flex items-center gap-2.5 transition-colors cursor-pointer ${
                     isSelected
-                      ? 'bg-[#f4dfcb] dark:bg-[#3c3328] text-[#68594d] dark:text-[#d7c3b4]'
-                      : 'hover:bg-[#f5f3ee] dark:hover:bg-[#2c2a26]'
+                      ? 'bg-[#D9C5B2] text-[#3D352E]'
+                      : 'hover:bg-[#E3DCD2] text-[#3D352E]'
                   }`}
                 >
                   <div
                     className={`w-7 h-7 rounded-md flex items-center justify-center shrink-0 ${
                       isSelected
-                        ? 'bg-[#68594d] text-white'
-                        : 'bg-[#f5f3ee] dark:bg-[#2c2a26] text-[#7f756e]'
+                        ? 'bg-[#8C7B6E] text-[#F9F7F2]'
+                        : 'bg-[#E3DCD2] text-[#8C7B6E]'
                     }`}
                   >
                     <Icon className="w-4 h-4" />
                   </div>
                   <div className="truncate">
                     <div className="text-xs font-medium leading-tight truncate">{item.title}</div>
-                    <div className="text-[10px] text-[#7f756e] leading-tight truncate">{item.description}</div>
+                    <div className="text-[10px] text-[#8C7B6E] leading-tight truncate">{item.description}</div>
                   </div>
                 </button>
               );

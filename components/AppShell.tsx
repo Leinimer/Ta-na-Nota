@@ -33,12 +33,6 @@ export function AppShell() {
     new Set(['folder-estudos', 'folder-direito', 'folder-constitucional', 'folder-financas'])
   );
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('saved');
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    if (typeof window !== 'undefined') {
-      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
-    }
-    return 'light';
-  });
 
   // UI state
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState(false);
@@ -48,12 +42,15 @@ export function AppShell() {
   const [isDraggingSidebar, setIsDraggingSidebar] = useState(false);
 
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', theme === 'dark');
-  }, [theme]);
-
-  const toggleTheme = () => {
-    setTheme((prev) => (prev === 'light' ? 'dark' : 'light'));
-  };
+    if (typeof window !== 'undefined') {
+      document.documentElement.classList.remove('dark');
+      try {
+        localStorage.removeItem('theme');
+      } catch {
+        // ignore
+      }
+    }
+  }, []);
 
   // 1. Select Note & Load Content
   const selectNode = useCallback(async (node: TreeNode) => {
@@ -346,7 +343,7 @@ export function AppShell() {
   return (
     <div
       id="app-shell"
-      className="flex h-screen w-screen overflow-hidden bg-[#f8f6f1] dark:bg-[#211e1b] text-[#2d2621] dark:text-[#f5f2eb] font-sans paper-texture"
+      className="flex h-screen w-screen overflow-hidden bg-[#F9F7F2] text-[#3D352E] font-sans paper-texture"
     >
       {/* Mobile Drawer Backdrop */}
       {isMobileDrawerOpen && (
@@ -368,8 +365,6 @@ export function AppShell() {
           tags={tags}
           currentUser={currentUser}
           syncStatus={syncStatus}
-          theme={theme}
-          onToggleTheme={toggleTheme}
           onOpenAuth={() => setIsAuthModalOpen(true)}
           onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
           onToggleExpand={toggleFolderExpand}
@@ -383,13 +378,14 @@ export function AppShell() {
           onExportNote={handleExportNote}
           onExportAll={handleExportAll}
           onMoveNode={handleMoveNode}
+          onFilterByTag={handleTagClick}
         />
 
         {/* Resizer Handle */}
         <div
           onMouseDown={handleMouseDownResize}
-          className={`absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-[#68594d]/40 transition-colors ${
-            isDraggingSidebar ? 'bg-[#68594d]' : ''
+          className={`absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-[#8C7B6E]/40 transition-colors ${
+            isDraggingSidebar ? 'bg-[#8C7B6E]' : ''
           }`}
         />
       </div>
@@ -407,8 +403,6 @@ export function AppShell() {
           tags={tags}
           currentUser={currentUser}
           syncStatus={syncStatus}
-          theme={theme}
-          onToggleTheme={toggleTheme}
           onOpenAuth={() => setIsAuthModalOpen(true)}
           onOpenCommandPalette={() => {
             setIsMobileDrawerOpen(false);
@@ -433,18 +427,18 @@ export function AppShell() {
       {/* Main Content Area */}
       <main id="main-content-canvas" className="flex-1 flex flex-col h-full overflow-hidden relative">
         {/* Mobile Header Toggle */}
-        <div className="md:hidden flex items-center justify-between px-4 py-2.5 bg-[#fefdfa] dark:bg-[#282421] border-b border-[#ded7c8] dark:border-[#38322b]">
+        <div className="md:hidden flex items-center justify-between px-4 py-2.5 bg-[#F9F7F2] border-b border-[#E3DCD2]">
           <button
             onClick={() => setIsMobileDrawerOpen(true)}
-            className="p-1.5 text-[#7d7064] hover:text-[#2d2621] rounded-md hover:bg-[#ede7dc] dark:hover:bg-[#332d28]"
+            className="p-1.5 text-[#8C7B6E] hover:text-[#3D352E] rounded-md hover:bg-[#E3DCD2] cursor-pointer"
             aria-label="Abrir Menu de Pastas"
           >
             <Menu className="w-5 h-5" />
           </button>
-          <span className="font-serif font-semibold text-sm text-[#2d2621] dark:text-[#f5f2eb]">Tá na nota</span>
+          <span className="font-serif font-semibold text-sm text-[#8C7B6E]">Tá na nota</span>
           <button
             onClick={() => setIsCommandPaletteOpen(true)}
-            className="p-1.5 text-[#7d7064] hover:text-[#2d2621] rounded-md hover:bg-[#ede7dc] dark:hover:bg-[#332d28]"
+            className="p-1.5 text-[#8C7B6E] hover:text-[#3D352E] rounded-md hover:bg-[#E3DCD2] cursor-pointer"
             aria-label="Buscar"
           >
             <Search className="w-5 h-5" />
@@ -468,29 +462,29 @@ export function AppShell() {
             onTagClick={handleTagClick}
           />
         ) : (
-          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-[#f8f6f1] dark:bg-[#211e1b]">
+          <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-[#F9F7F2]">
             <div className="max-w-md space-y-4">
-              <div className="w-16 h-16 rounded-2xl bg-[#edd9c4] dark:bg-[#3c3328] text-[#5c4e42] dark:text-[#dfd5c8] flex items-center justify-center mx-auto shadow-2xs border border-[#ded7c8] dark:border-[#443e37]">
+              <div className="w-16 h-16 rounded-2xl bg-[#D9C5B2] text-[#8C7B6E] flex items-center justify-center mx-auto shadow-2xs border border-[#E3DCD2]">
                 <BookOpen className="w-8 h-8" />
               </div>
-              <h2 className="text-2xl font-serif font-semibold text-[#2d2621] dark:text-[#f5f2eb] tracking-tight">
+              <h2 className="text-2xl font-serif font-semibold text-[#8C7B6E] tracking-tight">
                 Seu Segundo Cérebro Digital
               </h2>
-              <p className="text-sm text-[#7d7064] leading-relaxed">
+              <p className="text-sm text-[#8C7B6E]/80 leading-relaxed">
                 A árvore organiza. A nota armazena. Os links conectam. As tags categorizam. A busca encontra.
               </p>
               <div className="pt-2 flex flex-wrap justify-center gap-2">
                 <button
                   onClick={() => handleCreateNote(null)}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#5c4e42] hover:bg-[#483d34] text-white text-xs font-medium transition-colors cursor-pointer shadow-xs"
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-[#8C7B6E] hover:bg-[#796A5E] text-[#F9F7F2] text-xs font-medium transition-colors cursor-pointer shadow-xs"
                 >
                   <FilePlus className="w-4 h-4" /> Criar Primeira Nota
                 </button>
                 <button
                   onClick={() => handleCreateFolder(null)}
-                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-[#ded7c8] dark:border-[#443e37] bg-[#fefdfa] dark:bg-[#282421] hover:bg-[#ede7dc] dark:hover:bg-[#332d28] text-xs font-medium text-[#2d2621] dark:text-[#f5f2eb] transition-colors cursor-pointer"
+                  className="inline-flex items-center gap-2 px-4 py-2 rounded-lg border border-[#E3DCD2] bg-[#FFFFFF] hover:bg-[#E3DCD2] text-xs font-medium text-[#3D352E] transition-colors cursor-pointer"
                 >
-                  <FolderPlus className="w-4 h-4" /> Criar Pasta
+                  <FolderPlus className="w-4 h-4 text-[#8C7B6E]" /> Criar Pasta
                 </button>
               </div>
             </div>
@@ -508,7 +502,6 @@ export function AppShell() {
         onCreateNote={() => handleCreateNote(null)}
         onCreateFolder={() => handleCreateFolder(null)}
         onExportAll={handleExportAll}
-        onToggleTheme={toggleTheme}
       />
 
       {/* Auth & Sync Modal */}
@@ -531,33 +524,33 @@ export function AppShell() {
         >
           <div
             id="tag-notes-modal-card"
-            className="w-full max-w-md bg-[#fefdfa] dark:bg-[#282421] border border-[#ded7c8] dark:border-[#443e37] rounded-xl shadow-xl p-6 text-[#2d2621] dark:text-[#f5f2eb] relative animate-in fade-in zoom-in-95 duration-150"
+            className="w-full max-w-md bg-[#FEFDFA] border border-[#E3DCD2] rounded-xl shadow-xl p-6 text-[#3D352E] relative animate-in fade-in zoom-in-95 duration-150"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between pb-3 border-b border-[#ded7c8] dark:border-[#38322b] mb-4">
+            <div className="flex items-center justify-between pb-3 border-b border-[#E3DCD2] mb-4">
               <div className="flex items-center gap-2">
-                <span className="font-mono font-medium text-xs text-[#5c4e42] dark:text-[#dfd5c8] bg-[#ede7dc] dark:bg-[#332d28] px-2.5 py-0.5 rounded-full border border-[#ded7c8] dark:border-[#443e37]">
+                <span className="font-mono font-medium text-xs text-[#8C7B6E] bg-[#E3DCD2] px-2.5 py-0.5 rounded-full border border-[#D9C5B2]">
                   #{selectedTagNotesModal.tagName}
                 </span>
-                <span className="text-xs text-[#7d7064]">
+                <span className="text-xs text-[#8C7B6E]">
                   ({selectedTagNotesModal.notes.length} {selectedTagNotesModal.notes.length === 1 ? 'nota' : 'notas'})
                 </span>
               </div>
               <button
                 onClick={() => setSelectedTagNotesModal(null)}
-                className="text-[#7d7064] hover:text-[#2d2621] dark:hover:text-[#ffffff] p-1 rounded-md transition-colors cursor-pointer"
+                className="text-[#8C7B6E] hover:text-[#3D352E] p-1 rounded-md transition-colors cursor-pointer"
                 aria-label="Fechar"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
 
-            <div className="text-xs font-semibold text-[#7d7064] uppercase tracking-wider mb-2">
+            <div className="text-xs font-semibold text-[#8C7B6E] uppercase tracking-wider mb-2">
               Notas associadas
             </div>
 
             {selectedTagNotesModal.notes.length === 0 ? (
-              <div className="py-6 text-center text-xs text-[#7d7064] italic">
+              <div className="py-6 text-center text-xs text-[#8C7B6E]/70 italic">
                 Nenhuma nota associada a esta etiqueta no momento.
               </div>
             ) : (
@@ -569,15 +562,15 @@ export function AppShell() {
                       selectNode(n);
                       setSelectedTagNotesModal(null);
                     }}
-                    className="w-full flex items-center justify-between p-2.5 rounded-lg bg-[#ede7dc]/40 hover:bg-[#ede7dc] dark:bg-[#332d28]/40 dark:hover:bg-[#332d28] border border-[#ded7c8] dark:border-[#38322b] text-left transition-colors cursor-pointer group"
+                    className="w-full flex items-center justify-between p-2.5 rounded-lg bg-[#F9F7F2] hover:bg-[#E3DCD2] border border-[#E3DCD2] text-left transition-colors cursor-pointer group"
                   >
                     <div className="flex items-center gap-2.5 truncate">
-                      <FileText className="w-4 h-4 text-[#5c4e42] dark:text-[#dfd5c8] shrink-0" />
-                      <span className="text-sm font-medium truncate text-[#2d2621] dark:text-[#f5f2eb]">
+                      <FileText className="w-4 h-4 text-[#8C7B6E] shrink-0" />
+                      <span className="text-sm font-medium truncate text-[#3D352E]">
                         {n.name}
                       </span>
                     </div>
-                    <span className="text-[11px] text-[#7d7064] group-hover:text-[#5c4e42] shrink-0">
+                    <span className="text-[11px] text-[#8C7B6E] group-hover:text-[#3D352E] shrink-0">
                       Abrir →
                     </span>
                   </button>

@@ -27,7 +27,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           rel="stylesheet"
         />
       </head>
-      <body suppressHydrationWarning className="antialiased paper-texture selection:bg-[#f4dfcb] selection:text-[#68594d]">
+      <body suppressHydrationWarning className="antialiased paper-texture selection:bg-[#D9C5B2] selection:text-[#3D352E]">
         {children}
       </body>
     </html>
