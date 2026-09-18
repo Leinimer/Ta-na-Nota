@@ -102,6 +102,7 @@ export function AppShell() {
   const [tags, setTags] = useState<TagRecord[]>([]);
   const [activeNode, setActiveNode] = useState<TreeNode | null>(null);
   const [activeNote, setActiveNote] = useState<NoteRecord | null>(null);
+  const [remoteNoteUpdate, setRemoteNoteUpdate] = useState<NoteRecord | null>(null);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(
     new Set(['folder-estudos', 'folder-direito', 'folder-constitucional', 'folder-financas'])
   );
@@ -131,6 +132,7 @@ export function AppShell() {
   const selectNode = useCallback(async (node: TreeNode) => {
     if (node.type === 'folder') return;
     setActiveNode(node);
+    setRemoteNoteUpdate(null);
 
     try {
       const noteData = await noteService.getNoteByNodeId(node.id);
@@ -258,8 +260,38 @@ export function AppShell() {
             setActiveNode((prev) => (prev ? { ...prev, ...event.node } : null));
           }
         } else if (event.type === 'note') {
+          console.log('[REALTIME EVENT]', {
+            noteId: event.note?.id,
+            version: event.note?.version,
+            updatedAt: event.note?.updatedAt,
+            eventType: event.eventType,
+          });
+
           if (currentActiveNote && currentActiveNote.id === event.note?.id && event.note) {
-            setActiveNote(event.note);
+            const incomingVersion = Number(event.note.version || 1);
+            const knownVersion = Number(activeNoteRef.current?.version || 1);
+
+            // Se for menor ou igual à versão conhecida em memória, é eco da nossa própria sessão
+            if (incomingVersion <= knownVersion) {
+              console.log('[REALTIME LOCAL ECHO]', {
+                noteId: event.note.id,
+                version: incomingVersion,
+                knownVersion,
+              });
+              if (activeNoteRef.current) {
+                activeNoteRef.current.updatedAt = event.note.updatedAt;
+              }
+              return;
+            }
+
+            console.log('[REALTIME REMOTE CHANGE]', {
+              noteId: event.note.id,
+              incomingVersion,
+              knownVersion,
+            });
+
+            // Envia para o NoteEditor através de canal não-destrutivo preservando o cursor
+            setRemoteNoteUpdate({ ...event.note });
           }
         } else if (event.type === 'tag' || event.type === 'relation') {
           const updatedTags = await tagService.getTagsWithCount(userId);
@@ -353,10 +385,9 @@ export function AppShell() {
     // 1. Atualização imediata em memória na árvore (Sidebar atualiza em 0ms)
     setTree((prevTree) => updateNodeNameInTree(prevTree, nodeId, displayName));
 
-    // Atualiza activeNode sem recriar se o id for idêntico
+    // Atualiza activeNodeRef em memória sem recriar activeNode React state a cada tecla digitada
     if (activeNodeRef.current && activeNodeRef.current.id === nodeId) {
       activeNodeRef.current.name = displayName;
-      setActiveNode((prev) => (prev && prev.id === nodeId ? { ...prev, name: displayName } : prev));
     }
 
     // 2. Debounce na gravação no IndexedDB e na sync_queue para evitar sobrecarga de I/O
@@ -450,7 +481,7 @@ export function AppShell() {
   };
 
   // 11. Save Content (from Editor)
-  const handleSaveContent = async (nodeId: string, md: string, json: any) => {
+  const handleSaveContent = async (nodeId: string, md: string, json: any): Promise<NoteRecord | null> => {
     try {
       const savedNote = await noteService.saveNote(nodeId, md, json);
       // REGRA DE OURO: NÃO fazer setActiveNote(savedNote) após save LOCAL originado pelo editor!
@@ -465,9 +496,11 @@ export function AppShell() {
         const updatedTags = await tagService.getTagsWithCount(currentUser.id);
         setTags(updatedTags);
       }
+      return savedNote;
     } catch (err) {
       console.warn('Error saving note:', err);
       setSyncStatus('error');
+      return null;
     }
   };
 
@@ -688,6 +721,8 @@ export function AppShell() {
               node={activeNode}
               note={activeNote}
               syncStatus={syncStatus}
+              remoteNoteUpdate={remoteNoteUpdate}
+              onRemoteUpdateHandled={() => setRemoteNoteUpdate(null)}
               onUpdateTitle={handleUpdateTitleLive}
               onSaveContent={handleSaveContent}
               onToggleFavorite={handleToggleFavorite}

@@ -244,10 +244,9 @@ class RealtimeServiceClass {
 
     if (localNote) {
       const localVersion = Number(localNote.version || 1);
-      const localTime = new Date(localNote.updatedAt || 0).getTime();
 
-      // Política Last Write Wins: se o dado local for estritamente mais novo, ignora
-      if (localVersion > remoteVersion || (localVersion === remoteVersion && localTime >= remoteTime)) {
+      // Política Last Write Wins: se a versão local for igual ou superior à remota, ignora (eco local ou sobrescrita mais recente)
+      if (localVersion >= remoteVersion) {
         return;
       }
     }

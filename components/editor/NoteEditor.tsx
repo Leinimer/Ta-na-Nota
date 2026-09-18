@@ -14,6 +14,7 @@ import { Placeholder } from '@tiptap/extension-placeholder';
 import { Details, DetailsContent, DetailsSummary } from '@tiptap/extension-details';
 
 import { TreeNode, NoteRecord, BacklinkItem, AttachmentRecord, SyncStatus } from '@/types';
+import { TextSelection } from '@tiptap/pm/state';
 import { EditorToolbar } from './EditorToolbar';
 import { MarkdownEditor } from './MarkdownEditor';
 import { SlashCommandMenu } from './SlashCommandMenu';
@@ -27,8 +28,10 @@ interface NoteEditorProps {
   node: TreeNode;
   note: NoteRecord;
   syncStatus: SyncStatus;
+  remoteNoteUpdate?: NoteRecord | null;
+  onRemoteUpdateHandled?: () => void;
   onUpdateTitle: (nodeId: string, newTitle: string) => void;
-  onSaveContent: (nodeId: string, markdown: string, editorJson: any) => void;
+  onSaveContent: (nodeId: string, markdown: string, editorJson: any) => Promise<NoteRecord | null | void> | void;
   onToggleFavorite: (nodeId: string) => void;
   onDeleteNote: (nodeId: string) => void;
   onDuplicateNote: (nodeId: string) => void;
@@ -41,6 +44,8 @@ export function NoteEditor({
   node,
   note,
   syncStatus,
+  remoteNoteUpdate,
+  onRemoteUpdateHandled,
   onUpdateTitle,
   onSaveContent,
   onToggleFavorite,
@@ -49,10 +54,31 @@ export function NoteEditor({
 }: NoteEditorProps) {
   const [mode, setMode] = useState<'visual' | 'markdown'>('visual');
   const titleRef = useRef(node.name || 'Nova nota');
-  const lastKnownVersionRef = useRef<number>(note.version || 1);
-  const lastUpdatedAtRef = useRef<string>(note.updatedAt || '');
-  const lastLocallySavedMdRef = useRef<string>(note.markdownContent || '');
+
+  // Refs para controle estrito e separação entre edição local e dados remotos
+  const localEditRevisionRef = useRef(0);
+  const lastPersistedVersionRef = useRef<number>(note.version || 1);
+  const lastPersistedUpdatedAtRef = useRef<string>(note.updatedAt || '');
+  const lastPersistedMarkdownRef = useRef<string>(note.markdownContent || '');
+  const lastEditedMarkdownRef = useRef<string>(note.markdownContent || '');
   const activeNoteIdRef = useRef<string>(note.id);
+  const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Sincroniza refs quando o ID da nota ativa muda (abertura de uma nota diferente)
+  useEffect(() => {
+    activeNoteIdRef.current = note.id;
+    localEditRevisionRef.current = 0;
+    lastPersistedVersionRef.current = note.version || 1;
+    lastPersistedUpdatedAtRef.current = note.updatedAt || '';
+    lastPersistedMarkdownRef.current = note.markdownContent || '';
+    lastEditedMarkdownRef.current = note.markdownContent || '';
+    titleRef.current = node.name || 'Nova nota';
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [note.id]);
 
   // Ensure markdownContent has # Title as the first element
   const getInitialMarkdown = () => {
@@ -81,8 +107,6 @@ export function NoteEditor({
   useEffect(() => {
     highlightColorRef.current = highlightModeColor;
   }, [highlightModeColor]);
-
-  const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Compute initial Tiptap JSON content ensuring DocumentTitle is at index 0 and schema is valid
   const getInitialContent = () => {
@@ -162,7 +186,8 @@ export function NoteEditor({
     return () => {
       isMounted = false;
     };
-  }, [note.id, note.markdownContent, node.userId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [note.id, node.userId]);
 
   // Debounced autosave (~400ms)
   const triggerSave = useCallback(
@@ -170,8 +195,26 @@ export function NoteEditor({
       if (saveTimerRef.current) {
         clearTimeout(saveTimerRef.current);
       }
-      saveTimerRef.current = setTimeout(() => {
-        onSaveContent(node.id, md, json);
+      saveTimerRef.current = setTimeout(async () => {
+        try {
+          const savedNote = await onSaveContent(node.id, md, json);
+          if (savedNote) {
+            lastPersistedMarkdownRef.current = savedNote.markdownContent || md;
+            lastPersistedVersionRef.current = savedNote.version || (lastPersistedVersionRef.current + 1);
+            lastPersistedUpdatedAtRef.current = savedNote.updatedAt || new Date().toISOString();
+          } else {
+            lastPersistedMarkdownRef.current = md;
+            lastPersistedVersionRef.current += 1;
+            lastPersistedUpdatedAtRef.current = new Date().toISOString();
+          }
+          console.log('[EDITOR LOCAL SAVE]', {
+            noteId: node.id,
+            version: lastPersistedVersionRef.current,
+            updatedAt: lastPersistedUpdatedAtRef.current,
+          });
+        } catch (err) {
+          console.warn('[NoteEditor] Erro ao persistir nota:', err);
+        }
       }, 400);
     },
     [node.id, onSaveContent]
@@ -291,9 +334,15 @@ export function NoteEditor({
         },
       },
       onUpdate: ({ editor: ed }) => {
+        localEditRevisionRef.current += 1;
         const json = ed.getJSON();
         const md = MarkdownService.visualToMarkdown(json);
-        lastLocallySavedMdRef.current = md;
+        lastEditedMarkdownRef.current = md;
+        console.log('[EDITOR LOCAL UPDATE]', {
+          noteId: node.id,
+          revision: localEditRevisionRef.current,
+        });
+
         setMarkdownContent(md);
         setTags(MarkdownService.extractTags(md));
 
@@ -335,77 +384,105 @@ export function NoteEditor({
     }
   }, [node.name, editor]);
 
-  // Sincronização de atualizações remotas via Realtime (sem disparar loop de salvamento)
+  // Tratamento de atualizações remotas genuínas via Realtime (sem setContent destrutivo)
   useEffect(() => {
-    // Se o usuário alternou de nota ativa
-    if (note.id !== activeNoteIdRef.current) {
-      activeNoteIdRef.current = note.id;
-      lastKnownVersionRef.current = note.version || 1;
-      lastUpdatedAtRef.current = note.updatedAt || '';
-      lastLocallySavedMdRef.current = note.markdownContent || '';
+    if (!remoteNoteUpdate || remoteNoteUpdate.id !== note.id) return;
+
+    const incoming = remoteNoteUpdate;
+    const incomingVersion = Number(incoming.version || 1);
+    const persistedVersion = Number(lastPersistedVersionRef.current || 1);
+    const incomingMd = incoming.markdownContent || '';
+
+    // 1. Verificação adicional de eco da própria edição local
+    if (
+      incomingVersion <= persistedVersion ||
+      incomingMd === lastPersistedMarkdownRef.current ||
+      incomingMd === lastEditedMarkdownRef.current
+    ) {
+      console.log('[REALTIME LOCAL ECHO]', {
+        noteId: incoming.id,
+        version: incomingVersion,
+        persistedVersion,
+      });
+      lastPersistedVersionRef.current = Math.max(lastPersistedVersionRef.current, incomingVersion);
+      lastPersistedUpdatedAtRef.current = incoming.updatedAt || lastPersistedUpdatedAtRef.current;
+      onRemoteUpdateHandled?.();
       return;
     }
 
-    const incomingVersion = Number(note.version || 1);
-    const currentVersion = Number(lastKnownVersionRef.current || 1);
+    // 2. Mudança remota real
+    console.log('[REALTIME REMOTE CHANGE]', {
+      noteId: incoming.id,
+      incomingVersion,
+      persistedVersion,
+    });
 
-    // 1. Se for a mesma versão e mesmo timestamp, ignora evento redundante
-    if (incomingVersion === currentVersion && note.updatedAt === lastUpdatedAtRef.current) {
+    // Se o usuário estiver ativamente editando o editor no momento, não sobrescrever destrutivamente
+    const isActivelyEditing =
+      (editor && editor.isFocused) ||
+      lastEditedMarkdownRef.current !== lastPersistedMarkdownRef.current;
+
+    if (isActivelyEditing) {
+      console.warn('[NoteEditor] Edição local ativa em andamento; preservando conteúdo local contra sobrescrita remota.', {
+        noteId: incoming.id,
+        localVersion: persistedVersion,
+        remoteVersion: incomingVersion,
+      });
+      lastPersistedVersionRef.current = incomingVersion;
+      onRemoteUpdateHandled?.();
       return;
     }
 
-    // 2. Se a versão recebida for MENOR ou igual à versão já aplicada/conhecida, ignora (remoto desatualizado ou eco)
-    if (incomingVersion <= currentVersion) {
-      return;
-    }
+    // 3. Aplicação remota incremental preservando a seleção do cursor via transação nativa do ProseMirror
+    lastPersistedVersionRef.current = incomingVersion;
+    lastPersistedUpdatedAtRef.current = incoming.updatedAt || '';
+    lastPersistedMarkdownRef.current = incomingMd;
+    lastEditedMarkdownRef.current = incomingMd;
 
-    // 3. Se o conteúdo recebido for idêntico ao que o editor tem no momento ou ao que foi salvo localmente:
-    // Não reconstruir o documento Tiptap! Apenas atualizar referências de versão e timestamp
-    if (editor && !editor.isDestroyed) {
-      const currentEditorMd = MarkdownService.visualToMarkdown(editor.getJSON());
-      if (note.markdownContent === currentEditorMd || note.markdownContent === lastLocallySavedMdRef.current) {
-        lastKnownVersionRef.current = incomingVersion;
-        lastUpdatedAtRef.current = note.updatedAt || '';
-        return;
-      }
-    }
-
-    // 4. Versão remota genuína de outro cliente/sessão: aceita e aplica
-    lastKnownVersionRef.current = incomingVersion;
-    lastUpdatedAtRef.current = note.updatedAt || '';
-    lastLocallySavedMdRef.current = note.markdownContent || '';
-
-    const newMd = note.markdownContent || '';
-    setMarkdownContent(newMd);
-    setTags(MarkdownService.extractTags(newMd));
-
-    // Cancela qualquer autosave agendado de digitação anterior para não sobrescrever a versão remota mais nova
-    if (saveTimerRef.current) {
-      clearTimeout(saveTimerRef.current);
-      saveTimerRef.current = null;
-    }
+    setMarkdownContent(incomingMd);
+    setTags(MarkdownService.extractTags(incomingMd));
 
     if (editor && !editor.isDestroyed) {
       try {
-        let json = note.editorContent;
-        if (typeof json === 'string') {
+        const previousSelection = editor.state.selection;
+        let newJson = incoming.editorContent;
+        if (typeof newJson === 'string') {
           try {
-            json = JSON.parse(json);
+            newJson = JSON.parse(newJson);
           } catch {
-            json = null;
+            newJson = null;
           }
         }
-        if (!json || typeof json !== 'object' || json.type !== 'doc' || !Array.isArray(json.content)) {
-          json = MarkdownService.markdownToVisual(newMd, node.name || 'Nova nota');
+        if (!newJson || typeof newJson !== 'object' || newJson.type !== 'doc' || !Array.isArray(newJson.content)) {
+          newJson = MarkdownService.markdownToVisual(incomingMd, node.name || 'Nova nota');
         }
-        // Aplica a atualização no editor somente se a alteração for genuinamente remota
-        editor.commands.setContent(json, { emitUpdate: false });
+
+        const newDocNode = editor.schema.nodeFromJSON(newJson);
+        if (newDocNode) {
+          const { tr } = editor.state;
+          tr.replaceWith(0, tr.doc.content.size, newDocNode.content);
+
+          try {
+            const mappedFrom = Math.min(Math.max(1, tr.mapping.map(previousSelection.from)), tr.doc.content.size);
+            const mappedTo = Math.min(Math.max(mappedFrom, tr.mapping.map(previousSelection.to)), tr.doc.content.size);
+            tr.setSelection(TextSelection.create(tr.doc, mappedFrom, mappedTo));
+          } catch {
+            // Mapeamento seguro
+          }
+
+          editor.view.dispatch(tr);
+          console.log('[EDITOR REMOTE APPLIED WITH SELECTION MAPPING]', {
+            noteId: incoming.id,
+            version: incomingVersion,
+          });
+        }
       } catch (err) {
-        console.warn('[NoteEditor] Erro ao sincronizar conteúdo remoto no editor:', err);
+        console.warn('[NoteEditor] Erro ao aplicar atualização remota incremental:', err);
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [note.id, note.version, note.updatedAt, editor, note.markdownContent, note.editorContent]);
+
+    onRemoteUpdateHandled?.();
+  }, [remoteNoteUpdate, note.id, editor, node.name, onRemoteUpdateHandled]);
 
   // Toggle between Visual and Raw Markdown mode
   const handleToggleMode = (newMode: 'visual' | 'markdown') => {
