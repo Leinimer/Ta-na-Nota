@@ -329,7 +329,10 @@ export function AppShell() {
   // 11. Save Content (from Editor)
   const handleSaveContent = async (nodeId: string, md: string, json: any) => {
     try {
-      await noteService.saveNote(nodeId, md, json);
+      const savedNote = await noteService.saveNote(nodeId, md, json);
+      if (savedNote && activeNoteRef.current && (activeNoteRef.current.nodeId === nodeId || activeNoteRef.current.id === savedNote.id)) {
+        setActiveNote(savedNote);
+      }
       // refresh tags count in sidebar
       if (currentUser) {
         const updatedTags = await tagService.getTagsWithCount(currentUser.id);

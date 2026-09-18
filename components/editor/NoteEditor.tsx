@@ -69,6 +69,8 @@ export function NoteEditor({
   const [mode, setMode] = useState<'visual' | 'markdown'>('visual');
   const titleRef = useRef(node.name || 'Nova nota');
   const lastKnownVersionRef = useRef<number>(note.version || 1);
+  const lastUpdatedAtRef = useRef<string>(note.updatedAt || '');
+  const activeNoteIdRef = useRef<string>(note.id);
 
   // Keep titleRef in sync with node.name if changed externally
   useEffect(() => {
@@ -312,7 +314,6 @@ export function NoteEditor({
         },
       },
       onUpdate: ({ editor: ed }) => {
-        lastKnownVersionRef.current = (lastKnownVersionRef.current || 1) + 1;
         const json = ed.getJSON();
         const md = MarkdownService.visualToMarkdown(json);
         setMarkdownContent(md);
@@ -334,32 +335,61 @@ export function NoteEditor({
     [note.id]
   );
 
-  // Sincronização passiva de atualizações remotas via Realtime (sem disparar loop de salvamento)
+  // Sincronização de atualizações remotas via Realtime (sem disparar loop de salvamento)
   useEffect(() => {
-    if (note.version && note.version > (lastKnownVersionRef.current || 0)) {
-      lastKnownVersionRef.current = note.version;
-      const newMd = note.markdownContent || '';
-      setMarkdownContent(newMd);
-      setTags(MarkdownService.extractTags(newMd));
+    // Se o usuário alternou de nota ativa
+    if (note.id !== activeNoteIdRef.current) {
+      activeNoteIdRef.current = note.id;
+      lastKnownVersionRef.current = note.version || 1;
+      lastUpdatedAtRef.current = note.updatedAt || '';
+      return;
+    }
 
-      if (editor && !editor.isFocused) {
-        try {
-          let json = note.editorContent;
-          if (typeof json === 'string') {
-            try {
-              json = JSON.parse(json);
-            } catch {
-              json = null;
-            }
+    const incomingVersion = Number(note.version || 1);
+    const currentVersion = Number(lastKnownVersionRef.current || 1);
+
+    // 1. Se for a mesma versão e mesmo timestamp, ignora evento redundante
+    if (incomingVersion === currentVersion && note.updatedAt === lastUpdatedAtRef.current) {
+      return;
+    }
+
+    // 2. Se a versão recebida for MENOR que a versão já aplicada/conhecida, ignora (remoto desatualizado)
+    if (incomingVersion < currentVersion) {
+      return;
+    }
+
+    // 3. Versão remota é MAIOR: aceita e aplica
+    lastKnownVersionRef.current = incomingVersion;
+    lastUpdatedAtRef.current = note.updatedAt || '';
+
+    const newMd = note.markdownContent || '';
+    setMarkdownContent(newMd);
+    setTags(MarkdownService.extractTags(newMd));
+
+    // Cancela qualquer autosave agendado de digitação anterior para não sobrescrever a versão remota mais nova
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+
+    if (editor) {
+      try {
+        let json = note.editorContent;
+        if (typeof json === 'string') {
+          try {
+            json = JSON.parse(json);
+          } catch {
+            json = null;
           }
-          if (!json || typeof json !== 'object' || json.type !== 'doc' || !Array.isArray(json.content)) {
-            json = MarkdownService.markdownToVisual(newMd, node.name || 'Nova nota');
-          }
-          // A opção emitUpdate: false impede que o Tiptap dispare o evento 'onUpdate', evitando loop
-          editor.commands.setContent(json, { emitUpdate: false });
-        } catch (err) {
-          console.warn('[NoteEditor] Erro ao sincronizar conteúdo remoto no editor:', err);
         }
+        if (!json || typeof json !== 'object' || json.type !== 'doc' || !Array.isArray(json.content)) {
+          json = MarkdownService.markdownToVisual(newMd, node.name || 'Nova nota');
+        }
+        // Aplica a atualização no editor (mesmo que focado, pois a versão remota é comprovadamente mais nova)
+        // emitUpdate: false garante que o Tiptap NÃO dispara o onUpdate nem novo autosave!
+        editor.commands.setContent(json, { emitUpdate: false });
+      } catch (err) {
+        console.warn('[NoteEditor] Erro ao sincronizar conteúdo remoto no editor:', err);
       }
     }
   }, [note.id, note.version, note.updatedAt, editor, node.name, note.markdownContent, note.editorContent]);
@@ -385,7 +415,6 @@ export function NoteEditor({
 
   // Handle Markdown raw edit
   const handleMarkdownChange = (newMd: string) => {
-    lastKnownVersionRef.current = (lastKnownVersionRef.current || 1) + 1;
     setMarkdownContent(newMd);
     setTags(MarkdownService.extractTags(newMd));
 

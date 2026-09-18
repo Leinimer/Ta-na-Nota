@@ -89,7 +89,7 @@ export const noteService = {
     nodeId: string,
     markdownContent: string,
     editorContent: any
-  ): Promise<void> {
+  ): Promise<NoteRecord | null> {
     const canonicalNodeId = toCanonicalUuid(nodeId);
     let existing = await indexedDbService.getNoteByNodeId(canonicalNodeId);
     if (!existing) {
@@ -104,7 +104,7 @@ export const noteService = {
     const now = new Date().toISOString();
 
     if (!existing) {
-      if (!node) return;
+      if (!node) return null;
       existing = {
         id: crypto.randomUUID(),
         nodeId: node.id,
@@ -137,6 +137,8 @@ export const noteService = {
 
     // 3. Agenda a extração e sincronização de tags e links de forma DESACOPLADA (fora do caminho crítico)
     this.scheduleTagsAndLinksSync(existing.userId, existing.id, markdownContent);
+
+    return existing;
   },
 
   // Mapas para debounce independente de tags e links

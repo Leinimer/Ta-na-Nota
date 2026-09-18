@@ -520,6 +520,54 @@ export const indexedDbService = {
     });
   },
 
+  /**
+   * Conclui um item de sincronização de forma atômica e segura contra race conditions.
+   * Somente remove da fila se a versão atual na store for menor ou igual à versão que foi processada.
+   * Se o usuário realizou novas edições durante a requisição de rede e a fila foi atualizada
+   * para uma versão mais recente, o item É MANTIDO na fila para envio subsequente.
+   */
+  async completeSyncItem(
+    id: string,
+    processedVersion?: number
+  ): Promise<{ removed: boolean; currentVersion?: number }> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('sync_queue', 'readwrite');
+      const store = tx.objectStore('sync_queue');
+      const req = store.get(id);
+
+      req.onsuccess = () => {
+        const item = req.result as SyncQueueItem | undefined;
+        if (!item) {
+          resolve({ removed: true });
+          return;
+        }
+
+        const queueVersion = item.version !== undefined ? Number(item.version) : undefined;
+        const targetVersion = processedVersion !== undefined ? Number(processedVersion) : undefined;
+
+        // Se não houver controle de versão ou se a versão na fila for <= à processada:
+        if (
+          queueVersion === undefined ||
+          targetVersion === undefined ||
+          queueVersion <= targetVersion
+        ) {
+          store.delete(id);
+          resolve({ removed: true });
+        } else {
+          // Versão mais recente entrou na fila enquanto o sync estava em andamento: PRESERVA!
+          console.info(
+            `[SyncQueue] Mantendo item ${id}: versão na fila (${queueVersion}) > versão processada (${targetVersion})`
+          );
+          resolve({ removed: false, currentVersion: queueVersion });
+        }
+      };
+
+      tx.oncomplete = () => {};
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
   async getPendingSyncCount(userId: string): Promise<number> {
     const items = await this.getPendingSyncItems(userId);
     return items.length;

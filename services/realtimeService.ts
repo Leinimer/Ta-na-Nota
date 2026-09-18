@@ -58,7 +58,7 @@ class RealtimeServiceClass {
     };
   }
 
-  private notifyListeners(event: RealtimeAppEvent) {
+  public notifyListeners(event: RealtimeAppEvent) {
     for (const listener of this.listeners) {
       try {
         listener(event);

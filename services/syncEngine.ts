@@ -1,6 +1,8 @@
 import { TreeNode, NoteRecord, TagRecord, SyncStatus, SyncQueueItem } from '@/types';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import { indexedDbService } from './indexedDbService';
+import { realtimeService } from './realtimeService';
+import { MarkdownService } from './markdownService';
 
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -257,7 +259,7 @@ class SyncEngineClass {
     const versionNum = Math.max(1, Number(note.version || 1));
     const updatedAtIso = note.updatedAt || new Date().toISOString();
 
-    // 3. Tenta execução via RPC com atomicidade no banco
+    // 3. Execução prioritária via RPC como caminho principal com atomicidade no banco
     try {
       const { data: rpcData, error: rpcError } = await supabase.rpc('save_note_versioned', {
         p_id: canonicalNoteId,
@@ -275,12 +277,31 @@ class SyncEngineClass {
           console.info('[SyncEngine LWW] Versão remota mais nova rejeitou atualização obsoleta. Convergindo local.');
           const remoteRow = rpcData.note;
           if (remoteRow) {
+            let parsedEditorContent = remoteRow.editor_content;
+            if (typeof parsedEditorContent === 'string') {
+              try {
+                parsedEditorContent = JSON.parse(parsedEditorContent);
+              } catch {
+                parsedEditorContent = null;
+              }
+            }
+            if (
+              !parsedEditorContent ||
+              typeof parsedEditorContent !== 'object' ||
+              !Array.isArray(parsedEditorContent.content)
+            ) {
+              parsedEditorContent = MarkdownService.markdownToVisual(
+                remoteRow.markdown_content || '',
+                'Nota'
+              );
+            }
+
             const converged: NoteRecord = {
               id: remoteRow.id,
               nodeId: remoteRow.node_id,
               userId: remoteRow.user_id,
               markdownContent: remoteRow.markdown_content || '',
-              editorContent: remoteRow.editor_content || null,
+              editorContent: parsedEditorContent,
               isFavorite: Boolean(remoteRow.is_favorite),
               lastOpenedAt: remoteRow.last_opened_at,
               version: Number(remoteRow.version || 1),
@@ -288,15 +309,47 @@ class SyncEngineClass {
               updatedAt: remoteRow.updated_at,
             };
             await indexedDbService.saveNote(converged);
+
+            // Notifica listeners locais para atualizar a nota aberta no editor
+            realtimeService.notifyListeners({
+              type: 'note',
+              eventType: 'UPDATE',
+              note: converged,
+              nodeId: converged.nodeId,
+            });
           }
         }
         return true;
       }
-    } catch {
-      // Falha ao chamar RPC (ex: migração ainda não rodada). Prossegue com fallback seguro
+
+      if (rpcError) {
+        // Verifica estritamente se o erro é de função RPC inexistente no PostgreSQL (código 42883)
+        const isFunctionNotFound =
+          rpcError.code === '42883' ||
+          rpcError.message?.toLowerCase().includes('does not exist') ||
+          rpcError.message?.toLowerCase().includes('could not find the function') ||
+          rpcError.details?.toLowerCase().includes('does not exist');
+
+        if (!isFunctionNotFound) {
+          // Erro de autorização, constraint, RLS, parâmetros inválidos, etc.
+          // NUNCA contornar a proteção de concorrência com upsert cego!
+          console.error(
+            `[SyncEngine] Erro na RPC save_note_versioned (código: ${rpcError.code}):`,
+            rpcError.message
+          );
+          return false;
+        }
+
+        console.warn(
+          '[SyncEngine] RPC save_note_versioned não encontrada no banco (código 42883). Usando fallback seguro.'
+        );
+      }
+    } catch (err) {
+      console.warn('[SyncEngine] Exceção ao chamar save_note_versioned:', err);
+      return false;
     }
 
-    // 4. Fallback: upsert direto com validação de versão
+    // 4. Fallback: upsert direto SOMENTE se a RPC não existir no banco
     try {
       const payload = {
         id: canonicalNoteId,
@@ -378,8 +431,9 @@ class SyncEngineClass {
    * Garante:
    * - Apenas um processamento ativo por vez.
    * - Serialização por nota (sem requisições concorrentes da mesma nota).
-   * - Remoção de itens processados com sucesso.
+   * - Remoção segura de itens processados com verificação atômica de versão (completeSyncItem).
    * - Backoff exponencial para erros temporários.
+   * - Convergência garantida: se novas versões entrarem durante o envio, elas continuam na fila e são enviadas.
    * - Atualização precisa do status da UI ('saving' -> 'saved' / 'offline' / 'error').
    */
   async processPersistentQueue(): Promise<void> {
@@ -392,111 +446,145 @@ class SyncEngineClass {
         return;
       }
 
-      const pendingItems = await indexedDbService.getPendingSyncItems(authUserId);
-      if (pendingItems.length === 0) {
-        this.emitStatus('saved');
-        return;
-      }
+      let hasPendingWork = true;
 
-      this.emitStatus('saving');
-
-      for (const item of pendingItems) {
-        if (!this.isOnline) {
-          this.emitStatus('offline');
+      while (hasPendingWork && this.isOnline) {
+        const pendingItems = await indexedDbService.getPendingSyncItems(authUserId);
+        if (pendingItems.length === 0) {
+          hasPendingWork = false;
           break;
         }
 
-        // Se for nota e já houver requisição em andamento para esta nota, aguarda a próxima rodada
-        if (item.entityType === 'note') {
-          if (this.inFlightNotes.has(item.entityId)) {
-            continue;
+        let processedAnyItem = false;
+
+        for (const item of pendingItems) {
+          if (!this.isOnline) {
+            this.emitStatus('offline');
+            return;
           }
-          this.inFlightNotes.add(item.entityId);
-        }
 
-        try {
-          let success = false;
-
+          // Se for nota e já houver requisição em andamento para esta nota, aguarda a próxima rodada
           if (item.entityType === 'note') {
-            const { note, node } = item.payload || {};
-            if (note) {
-              success = await this.syncNote(note, node);
-            } else {
-              success = true; // Payload inválido, remove para não travar
+            if (this.inFlightNotes.has(item.entityId)) {
+              continue;
             }
-          } else if (item.entityType === 'node') {
-            const node = item.payload;
-            if (node) {
-              await this.syncNode(node);
-              success = true;
-            } else {
-              success = true;
-            }
-          } else if (item.entityType === 'tag') {
-            const tag = item.payload;
-            if (tag) {
-              await this.syncTag(tag);
-              success = true;
-            } else {
-              success = true;
-            }
-          } else if (item.entityType === 'note_tags') {
-            const { noteId, tagIds } = item.payload || {};
-            if (noteId && tagIds) {
-              await this.syncNoteTags(authUserId, noteId, tagIds);
-              success = true;
-            } else {
-              success = true;
-            }
-          } else if (item.entityType === 'note_links') {
-            const { sourceNoteId, targetNoteIds } = item.payload || {};
-            if (sourceNoteId && targetNoteIds) {
-              await this.syncNoteLinks(authUserId, sourceNoteId, targetNoteIds);
-              success = true;
-            } else {
-              success = true;
-            }
+            this.inFlightNotes.add(item.entityId);
           }
 
-          if (success) {
-            await indexedDbService.removeSyncItem(item.id);
-          } else {
+          processedAnyItem = true;
+          this.emitStatus('saving');
+
+          try {
+            let success = false;
+
+            if (item.entityType === 'note') {
+              const { note, node } = item.payload || {};
+              if (note) {
+                success = await this.syncNote(note, node);
+              } else {
+                success = true; // Payload inválido, remove para não travar
+              }
+            } else if (item.entityType === 'node') {
+              const node = item.payload;
+              if (node) {
+                await this.syncNode(node);
+                success = true;
+              } else {
+                success = true;
+              }
+            } else if (item.entityType === 'tag') {
+              const tag = item.payload;
+              if (tag) {
+                await this.syncTag(tag);
+                success = true;
+              } else {
+                success = true;
+              }
+            } else if (item.entityType === 'note_tags') {
+              const { noteId, tagIds } = item.payload || {};
+              if (noteId && tagIds) {
+                await this.syncNoteTags(authUserId, noteId, tagIds);
+                success = true;
+              } else {
+                success = true;
+              }
+            } else if (item.entityType === 'note_links') {
+              const { sourceNoteId, targetNoteIds } = item.payload || {};
+              if (sourceNoteId && targetNoteIds) {
+                await this.syncNoteLinks(authUserId, sourceNoteId, targetNoteIds);
+                success = true;
+              } else {
+                success = true;
+              }
+            }
+
+            if (success) {
+              // Remoção atômica e segura por versão:
+              // Se novas edições foram enfileiradas com versão mais recente enquanto o sync
+              // estava em voo, completeSyncItem NÃO deleta e a versão mais nova permanece na fila.
+              const targetVersion =
+                item.entityType === 'note' && item.payload?.note?.version
+                  ? Number(item.payload.note.version)
+                  : item.version;
+
+              await indexedDbService.completeSyncItem(item.id, targetVersion);
+            } else {
+              const attempts = (item.attempts || 0) + 1;
+              const backoffMs = Math.min(60000, 1000 * Math.pow(2, attempts));
+              await indexedDbService.updateSyncItem({
+                ...item,
+                attempts,
+                nextAttemptAt: Date.now() + backoffMs,
+                status: attempts >= 5 ? 'failed' : 'pending',
+                lastError: 'Falha temporária de sincronização',
+              });
+              if (attempts >= 5) {
+                this.emitStatus('error');
+              }
+            }
+          } catch (err: any) {
+            console.warn('[SyncEngine] Exceção ao processar item da fila:', err);
             const attempts = (item.attempts || 0) + 1;
-            const backoffMs = Math.min(60000, 1000 * Math.pow(2, attempts));
             await indexedDbService.updateSyncItem({
               ...item,
               attempts,
-              nextAttemptAt: Date.now() + backoffMs,
+              nextAttemptAt: Date.now() + 3000,
               status: attempts >= 5 ? 'failed' : 'pending',
-              lastError: 'Falha temporária de sincronização',
+              lastError: err?.message || 'Erro desconhecido',
             });
             this.emitStatus('error');
+          } finally {
+            if (item.entityType === 'note') {
+              this.inFlightNotes.delete(item.entityId);
+            }
           }
-        } catch (err: any) {
-          console.warn('[SyncEngine] Exceção ao processar item da fila:', err);
-          const attempts = (item.attempts || 0) + 1;
-          await indexedDbService.updateSyncItem({
-            ...item,
-            attempts,
-            nextAttemptAt: Date.now() + 3000,
-            status: attempts >= 5 ? 'failed' : 'pending',
-            lastError: err?.message || 'Erro desconhecido',
-          });
-          this.emitStatus('error');
-        } finally {
-          if (item.entityType === 'note') {
-            this.inFlightNotes.delete(item.entityId);
-          }
+
+          // Intervalo de cortesia de 50ms entre itens
+          await new Promise((res) => setTimeout(res, 50));
         }
 
-        // Intervalo de cortesia de 80ms entre itens para evitar picos de tráfego
-        await new Promise((res) => setTimeout(res, 80));
+        if (!processedAnyItem) {
+          // Nenhum item elegível para processamento nesta iteração (ex: todos bloqueados por backoff ou em voo)
+          break;
+        }
+
+        // Checa se ainda há itens pendentes prontos na fila
+        const count = await indexedDbService.getPendingSyncCount(authUserId);
+        if (count === 0) {
+          hasPendingWork = false;
+        }
       }
 
-      // Verifica itens restantes
-      const remainingCount = await indexedDbService.getPendingSyncCount(authUserId);
-      if (remainingCount === 0) {
-        this.emitStatus('saved');
+      // Validação final de status: SOMENTE emite 'saved' se a fila de fato não tiver mais pendências
+      if (this.isOnline) {
+        const remainingCount = await indexedDbService.getPendingSyncCount(authUserId);
+        if (remainingCount === 0) {
+          this.emitStatus('saved');
+        } else {
+          // Se ainda há pendências (ex: versão mais nova adicionada nos últimos milissegundos),
+          // agenda a próxima execução
+          this.triggerQueueProcessing(80);
+        }
       }
     } finally {
       this.isProcessingQueue = false;
