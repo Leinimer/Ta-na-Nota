@@ -88,3 +88,19 @@ export interface SearchResults {
 }
 
 export type SyncStatus = 'saved' | 'saving' | 'offline' | 'error';
+
+export interface SyncQueueItem {
+  id: string;
+  userId: string;
+  entityType: 'note' | 'node' | 'tag' | 'note_tags' | 'note_links' | 'attachment';
+  entityId: string;
+  operation: 'upsert' | 'delete';
+  payload: any;
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+  attempts: number;
+  nextAttemptAt: number;
+  status: 'pending' | 'processing' | 'failed';
+  lastError?: string;
+}

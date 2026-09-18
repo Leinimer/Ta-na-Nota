@@ -105,10 +105,28 @@ export function NoteEditor({
 
   const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Compute initial Tiptap JSON content ensuring DocumentTitle is at index 0
+  // Compute initial Tiptap JSON content ensuring DocumentTitle is at index 0 and schema is valid
   const getInitialContent = () => {
-    if (note.editorContent && note.editorContent.content?.[0]?.type === 'documentTitle') {
-      return note.editorContent;
+    try {
+      let content = note.editorContent;
+      if (typeof content === 'string') {
+        try {
+          content = JSON.parse(content);
+        } catch {
+          content = null;
+        }
+      }
+      if (
+        content &&
+        typeof content === 'object' &&
+        content.type === 'doc' &&
+        Array.isArray(content.content) &&
+        content.content[0]?.type === 'documentTitle'
+      ) {
+        return content;
+      }
+    } catch (err) {
+      console.warn('[NoteEditor] Falha ao processar editorContent inicial:', err);
     }
     return MarkdownService.markdownToVisual(getInitialMarkdown(), node.name || 'Nova nota');
   };
@@ -325,10 +343,23 @@ export function NoteEditor({
       setTags(MarkdownService.extractTags(newMd));
 
       if (editor && !editor.isFocused) {
-        const json =
-          note.editorContent || MarkdownService.markdownToVisual(newMd, node.name || 'Nova nota');
-        // A opção emitUpdate: false impede que o Tiptap dispare o evento 'onUpdate', evitando loop
-        editor.commands.setContent(json, { emitUpdate: false });
+        try {
+          let json = note.editorContent;
+          if (typeof json === 'string') {
+            try {
+              json = JSON.parse(json);
+            } catch {
+              json = null;
+            }
+          }
+          if (!json || typeof json !== 'object' || json.type !== 'doc' || !Array.isArray(json.content)) {
+            json = MarkdownService.markdownToVisual(newMd, node.name || 'Nova nota');
+          }
+          // A opção emitUpdate: false impede que o Tiptap dispare o evento 'onUpdate', evitando loop
+          editor.commands.setContent(json, { emitUpdate: false });
+        } catch (err) {
+          console.warn('[NoteEditor] Erro ao sincronizar conteúdo remoto no editor:', err);
+        }
       }
     }
   }, [note.id, note.version, note.updatedAt, editor, node.name, note.markdownContent, note.editorContent]);

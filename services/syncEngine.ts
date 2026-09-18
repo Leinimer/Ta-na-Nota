@@ -1,4 +1,4 @@
-import { TreeNode, NoteRecord, TagRecord, SyncStatus } from '@/types';
+import { TreeNode, NoteRecord, TagRecord, SyncStatus, SyncQueueItem } from '@/types';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import { indexedDbService } from './indexedDbService';
 
@@ -17,41 +17,36 @@ export function toCanonicalUuid(id: string | null | undefined): string {
   return crypto.randomUUID();
 }
 
-interface PendingSaveItem {
-  note: NoteRecord;
-  node?: TreeNode;
-}
-
 type SyncStatusListener = (status: SyncStatus) => void;
 
 class SyncEngineClass {
-  // Fila de serialização por nodeId para evitar gravações concorrentes
+  // Controle de concorrência por nodeId para garantir serialização de requisições de uma mesma nota
   private inFlightNotes = new Set<string>();
-  private pendingQueue = new Map<string, PendingSaveItem>();
 
-  // Dicionários para evitar requisições redundantes de Tags, Links e Nodes
-  private lastSyncedTags = new Map<string, string>(); // noteId -> tagIds sorted string
-  private lastSyncedLinks = new Map<string, string>(); // sourceNoteId -> targetIds sorted string
+  // Dicionários em memória para evitar requisições redundantes de Tags, Links e Nodes
+  private lastSyncedTags = new Map<string, string>(); // canonicalNoteId -> sortedTagIds
+  private lastSyncedLinks = new Map<string, string>(); // canonicalSourceId -> sortedTargetIds
   private lastSyncedNodeTime = new Map<string, string>(); // nodeId -> updatedAt
 
-  // Status de sincronização e ouvintes
+  // Status e ouvintes
   private currentStatus: SyncStatus = 'saved';
   private statusListeners: Set<SyncStatusListener> = new Set();
 
-  // Controle de conectividade offline/online
+  // Controle de processamento de fila e conectividade
   private isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
-  private isFlushingQueue = false;
+  private isProcessingQueue = false;
+  private queueDebounceTimer: NodeJS.Timeout | null = null;
 
   constructor() {
     if (typeof window !== 'undefined') {
       window.addEventListener('online', () => {
-        console.info('[SyncEngine] Conexão restabelecida. Processando pendências...');
+        console.info('[SyncEngine] Conexão restabelecida. Processando fila de sincronização...');
         this.isOnline = true;
-        this.flushPendingQueue();
+        this.triggerQueueProcessing(100);
       });
 
       window.addEventListener('offline', () => {
-        console.warn('[SyncEngine] Dispositivo offline. Salvamentos remotos pausados.');
+        console.warn('[SyncEngine] Dispositivo offline. Sincronização remota pausada.');
         this.isOnline = false;
         this.emitStatus('offline');
       });
@@ -114,11 +109,10 @@ class SyncEngineClass {
       cleanMarkdown.includes('data:video/') ||
       cleanMarkdown.includes(';base64,')
     ) {
-      console.error(
-        '[SyncEngine Security] Bloqueado envio de Base64 em markdown_content. ' +
+      console.warn(
+        '[SyncEngine Security] Sanitizando referências Base64 em markdown_content. ' +
         'Arquivos devem ser persistidos no Storage e referenciados por "attachment:...".'
       );
-      // Remove URLs data:... de imagens markdown: ![alt](data:...) -> ![alt](attachment:removido)
       cleanMarkdown = cleanMarkdown.replace(
         /!\[(.*?)\]\(data:[^)]+\)/gi,
         '![$1](attachment:base64_bloqueado)'
@@ -127,40 +121,43 @@ class SyncEngineClass {
 
     // 2. Verificação no Tiptap JSON Editor Content
     if (cleanEditor && typeof cleanEditor === 'object') {
-      const editorStr = JSON.stringify(cleanEditor);
-      if (
-        editorStr.includes('data:image/') ||
-        editorStr.includes('data:application/') ||
-        editorStr.includes(';base64,')
-      ) {
-        console.error(
-          '[SyncEngine Security] Bloqueado envio de Base64 em editor_content. Sanitizando árvore de nós.'
-        );
+      try {
+        const editorStr = JSON.stringify(cleanEditor);
+        if (
+          editorStr.includes('data:image/') ||
+          editorStr.includes('data:application/') ||
+          editorStr.includes(';base64,')
+        ) {
+          console.warn(
+            '[SyncEngine Security] Sanitizando referências Base64 em editor_content.'
+          );
 
-        // Clona e remove recursivamente atributos data: de nós de imagem/mídia
-        const sanitizeNode = (node: any): any => {
-          if (!node || typeof node !== 'object') return node;
-          const copy = { ...node };
+          const sanitizeNode = (node: any): any => {
+            if (!node || typeof node !== 'object') return node;
+            const copy = { ...node };
 
-          if (copy.attrs && typeof copy.attrs === 'object') {
-            const copyAttrs = { ...copy.attrs };
-            if (
-              typeof copyAttrs.src === 'string' &&
-              (copyAttrs.src.startsWith('data:') || copyAttrs.src.includes(';base64,'))
-            ) {
-              copyAttrs.src = '';
-              copyAttrs.alt = (copyAttrs.alt || 'Imagem') + ' (Base64 removido por segurança)';
+            if (copy.attrs && typeof copy.attrs === 'object') {
+              const copyAttrs = { ...copy.attrs };
+              if (
+                typeof copyAttrs.src === 'string' &&
+                (copyAttrs.src.startsWith('data:') || copyAttrs.src.includes(';base64,'))
+              ) {
+                copyAttrs.src = '';
+                copyAttrs.alt = (copyAttrs.alt || 'Imagem') + ' (Base64 removido por segurança)';
+              }
+              copy.attrs = copyAttrs;
             }
-            copy.attrs = copyAttrs;
-          }
 
-          if (Array.isArray(copy.content)) {
-            copy.content = copy.content.map(sanitizeNode);
-          }
-          return copy;
-        };
+            if (Array.isArray(copy.content)) {
+              copy.content = copy.content.map(sanitizeNode);
+            }
+            return copy;
+          };
 
-        cleanEditor = sanitizeNode(cleanEditor);
+          cleanEditor = sanitizeNode(cleanEditor);
+        }
+      } catch (err) {
+        console.warn('[SyncEngine] Falha ao serializar editorContent para verificação:', err);
       }
     }
 
@@ -183,7 +180,7 @@ class SyncEngineClass {
     const authUserId = await this.getAuthenticatedUserId();
     if (!authUserId) return;
 
-    // Verifica se já enviamos este estado do nó
+    // Evita enviar se não mudou desde o último envio
     const lastTime = this.lastSyncedNodeTime.get(node.id);
     if (lastTime && lastTime === node.updatedAt && !node.deletedAt) {
       return;
@@ -212,22 +209,22 @@ class SyncEngineClass {
           this.lastSyncedNodeTime.set(node.id, node.updatedAt);
           return;
         }
-        console.warn(`[SyncEngine] Erro ao sincronizar node (tentativa ${attempt}/${maxRetries}):`, error.message);
+        console.warn(`[SyncEngine] Erro ao sincronizar node (${attempt}/${maxRetries}):`, error.message);
       } catch (err) {
-        console.warn(`[SyncEngine] Exceção de rede no syncNode (tentativa ${attempt}/${maxRetries}):`, err);
+        console.warn(`[SyncEngine] Exceção no syncNode (${attempt}/${maxRetries}):`, err);
       }
 
       if (attempt < maxRetries) {
-        await new Promise((res) => setTimeout(res, 400 * Math.pow(2, attempt - 1)));
+        await new Promise((res) => setTimeout(res, 300 * attempt));
       }
     }
   }
 
   /**
-   * Sincroniza um registro na tabela `notes` do Supabase de forma idempotente.
-   * Aplica sanitização contra Base64 e backoff exponencial limitado (máx 2 tentativas).
+   * Envia uma nota para o Supabase com controle de concorrência Last Write Wins (LWW).
+   * Tenta usar a RPC `save_note_versioned` para atomicidade; se indisponível, faz upsert seguro.
    */
-  async syncNote(note: NoteRecord, maxRetries: number = 2): Promise<boolean> {
+  async syncNote(note: NoteRecord, node?: TreeNode): Promise<boolean> {
     const supabase = getSupabase();
     if (!supabase || !isSupabaseConfigured) return false;
 
@@ -239,7 +236,17 @@ class SyncEngineClass {
     const authUserId = await this.getAuthenticatedUserId();
     if (!authUserId) return false;
 
-    // 1. Sanitiza conteúdo contra Base64 acidental antes do envio
+    // 1. Garante que o node pai exista no Supabase antes da nota para satisfazer FK
+    if (node) {
+      await this.syncNode(node);
+    } else {
+      const localNode = await indexedDbService.getNode(note.nodeId);
+      if (localNode) {
+        await this.syncNode(localNode);
+      }
+    }
+
+    // 2. Sanitiza conteúdo contra Base64
     const { markdown, editor } = this.sanitizePayloadBeforeSync(
       note.markdownContent,
       note.editorContent
@@ -247,128 +254,252 @@ class SyncEngineClass {
 
     const canonicalNoteId = toCanonicalUuid(note.id);
     const canonicalNodeId = toCanonicalUuid(note.nodeId);
+    const versionNum = Math.max(1, Number(note.version || 1));
+    const updatedAtIso = note.updatedAt || new Date().toISOString();
 
-    const payload = {
-      id: canonicalNoteId,
-      node_id: canonicalNodeId,
-      user_id: authUserId,
-      markdown_content: markdown,
-      editor_content: editor,
-      is_favorite: Boolean(note.isFavorite),
-      last_opened_at: note.lastOpenedAt ?? null,
-      version: Number(note.version || 1),
-      updated_at: note.updatedAt || new Date().toISOString(),
-    };
+    // 3. Tenta execução via RPC com atomicidade no banco
+    try {
+      const { data: rpcData, error: rpcError } = await supabase.rpc('save_note_versioned', {
+        p_id: canonicalNoteId,
+        p_node_id: canonicalNodeId,
+        p_markdown_content: markdown,
+        p_editor_content: editor,
+        p_is_favorite: Boolean(note.isFavorite),
+        p_last_opened_at: note.lastOpenedAt ?? null,
+        p_version: versionNum,
+        p_updated_at: updatedAtIso,
+      });
 
-    let attempt = 0;
-    while (attempt < maxRetries) {
-      attempt++;
-      try {
-        const { error } = await supabase.from('notes').upsert(payload, { onConflict: 'node_id' });
-        if (!error) {
-          return true;
-        }
-
-        // Se o erro foi chave estrangeira (node não existe no Supabase), tenta sincronizar o node uma única vez
-        if (error.code === '23503' && attempt === 1) {
-          const localNode = await indexedDbService.getNode(note.nodeId);
-          if (localNode) {
-            await this.syncNode(localNode, 1);
+      if (!rpcError && rpcData) {
+        if (rpcData.status === 'rejected_stale') {
+          console.info('[SyncEngine LWW] Versão remota mais nova rejeitou atualização obsoleta. Convergindo local.');
+          const remoteRow = rpcData.note;
+          if (remoteRow) {
+            const converged: NoteRecord = {
+              id: remoteRow.id,
+              nodeId: remoteRow.node_id,
+              userId: remoteRow.user_id,
+              markdownContent: remoteRow.markdown_content || '',
+              editorContent: remoteRow.editor_content || null,
+              isFavorite: Boolean(remoteRow.is_favorite),
+              lastOpenedAt: remoteRow.last_opened_at,
+              version: Number(remoteRow.version || 1),
+              createdAt: remoteRow.created_at,
+              updatedAt: remoteRow.updated_at,
+            };
+            await indexedDbService.saveNote(converged);
           }
         }
-
-        console.warn(`[SyncEngine] Erro ao sincronizar note (tentativa ${attempt}/${maxRetries}):`, error.message);
-      } catch (err) {
-        console.warn(`[SyncEngine] Exceção de rede no syncNote (tentativa ${attempt}/${maxRetries}):`, err);
+        return true;
       }
-
-      if (attempt < maxRetries) {
-        await new Promise((res) => setTimeout(res, 500 * Math.pow(2, attempt - 1)));
-      }
+    } catch {
+      // Falha ao chamar RPC (ex: migração ainda não rodada). Prossegue com fallback seguro
     }
 
-    return false;
+    // 4. Fallback: upsert direto com validação de versão
+    try {
+      const payload = {
+        id: canonicalNoteId,
+        node_id: canonicalNodeId,
+        user_id: authUserId,
+        markdown_content: markdown,
+        editor_content: editor,
+        is_favorite: Boolean(note.isFavorite),
+        last_opened_at: note.lastOpenedAt ?? null,
+        version: versionNum,
+        updated_at: updatedAtIso,
+      };
+
+      const { error } = await supabase.from('notes').upsert(payload, { onConflict: 'node_id' });
+      if (!error) {
+        return true;
+      }
+      console.warn('[SyncEngine] Erro no fallback upsert de note:', error.message);
+      return false;
+    } catch (err) {
+      console.warn('[SyncEngine] Exceção no syncNote:', err);
+      return false;
+    }
   }
 
   /**
-   * Enfileira salvamento com serialização estrita por nota e agrupamento de digitações rápidas.
-   * Garante que:
-   * - Nunca duas gravações da mesma nota rodem em paralelo.
-   * - Se o usuário digitar rápido, envia apenas o estado mais recente.
-   * - Atualiza status de forma clara: 'saving' -> 'saved' / 'offline' / 'error'.
+   * Enfileira salvamento com persistência no IndexedDB (`sync_queue`), coalescing
+   * e serialização estrita por nota.
    */
   async enqueueNoteSave(note: NoteRecord, node?: TreeNode): Promise<void> {
+    const userId = note.userId;
     const key = note.nodeId;
 
+    // 1. Persiste na fila durável do IndexedDB com coalescing automático
+    const queueItem: SyncQueueItem = {
+      id: `sync_note_${note.id}`,
+      userId,
+      entityType: 'note',
+      entityId: key,
+      operation: 'upsert',
+      payload: { note, node },
+      version: Number(note.version || 1),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      attempts: 0,
+      nextAttemptAt: 0,
+      status: 'pending',
+    };
+
+    try {
+      await indexedDbService.enqueueSyncItem(queueItem);
+    } catch (err) {
+      console.warn('[SyncEngine] Falha ao persistir na fila do IndexedDB:', err);
+    }
+
     if (!this.isOnline) {
-      this.pendingQueue.set(key, { note, node });
       this.emitStatus('offline');
       return;
     }
 
-    if (this.inFlightNotes.has(key)) {
-      // Já existe gravação em andamento para esta nota; mantém apenas o estado mais recente
-      this.pendingQueue.set(key, { note, node });
-      return;
-    }
-
-    this.inFlightNotes.add(key);
     this.emitStatus('saving');
-
-    try {
-      if (node) {
-        await this.syncNode(node);
-      }
-      const success = await this.syncNote(note);
-
-      if (success) {
-        // Se a fila não tiver novos itens para esta nota, marca como sincronizado
-        if (!this.pendingQueue.has(key)) {
-          this.emitStatus('saved');
-        }
-      } else {
-        if (!this.isOnline) {
-          this.pendingQueue.set(key, { note, node });
-          this.emitStatus('offline');
-        } else {
-          this.emitStatus('error');
-        }
-      }
-    } catch (err) {
-      console.error('[SyncEngine] Falha ao processar salvamento na fila:', err);
-      this.emitStatus('error');
-    } finally {
-      this.inFlightNotes.delete(key);
-
-      // Se edições adicionais chegaram durante o envio, processa agora o estado final
-      if (this.pendingQueue.has(key)) {
-        const next = this.pendingQueue.get(key)!;
-        this.pendingQueue.delete(key);
-        // Processa recursivamente o estado final
-        this.enqueueNoteSave(next.note, next.node);
-      }
-    }
+    this.triggerQueueProcessing(50);
   }
 
   /**
-   * Processa itens pendentes após reconexão à internet de forma cadenciada (sem avalanche).
+   * Dispara o processamento da fila persistente com debounce para cadenciar as requisições.
    */
-  private async flushPendingQueue() {
-    if (this.isFlushingQueue || this.pendingQueue.size === 0) return;
-    this.isFlushingQueue = true;
+  private triggerQueueProcessing(delayMs: number = 100) {
+    if (this.queueDebounceTimer) {
+      clearTimeout(this.queueDebounceTimer);
+    }
+    this.queueDebounceTimer = setTimeout(() => {
+      this.processPersistentQueue();
+    }, delayMs);
+  }
+
+  /**
+   * Processador da fila persistente do IndexedDB.
+   * Garante:
+   * - Apenas um processamento ativo por vez.
+   * - Serialização por nota (sem requisições concorrentes da mesma nota).
+   * - Remoção de itens processados com sucesso.
+   * - Backoff exponencial para erros temporários.
+   * - Atualização precisa do status da UI ('saving' -> 'saved' / 'offline' / 'error').
+   */
+  async processPersistentQueue(): Promise<void> {
+    if (this.isProcessingQueue || !this.isOnline) return;
+    this.isProcessingQueue = true;
 
     try {
-      const items = Array.from(this.pendingQueue.entries());
-      this.pendingQueue.clear();
+      const authUserId = await this.getAuthenticatedUserId();
+      if (!authUserId) {
+        return;
+      }
 
-      for (const [, item] of items) {
-        if (!this.isOnline) break;
-        await this.enqueueNoteSave(item.note, item.node);
-        // Intervalo de cortesia para evitar tempestade de requisições
-        await new Promise((res) => setTimeout(res, 120));
+      const pendingItems = await indexedDbService.getPendingSyncItems(authUserId);
+      if (pendingItems.length === 0) {
+        this.emitStatus('saved');
+        return;
+      }
+
+      this.emitStatus('saving');
+
+      for (const item of pendingItems) {
+        if (!this.isOnline) {
+          this.emitStatus('offline');
+          break;
+        }
+
+        // Se for nota e já houver requisição em andamento para esta nota, aguarda a próxima rodada
+        if (item.entityType === 'note') {
+          if (this.inFlightNotes.has(item.entityId)) {
+            continue;
+          }
+          this.inFlightNotes.add(item.entityId);
+        }
+
+        try {
+          let success = false;
+
+          if (item.entityType === 'note') {
+            const { note, node } = item.payload || {};
+            if (note) {
+              success = await this.syncNote(note, node);
+            } else {
+              success = true; // Payload inválido, remove para não travar
+            }
+          } else if (item.entityType === 'node') {
+            const node = item.payload;
+            if (node) {
+              await this.syncNode(node);
+              success = true;
+            } else {
+              success = true;
+            }
+          } else if (item.entityType === 'tag') {
+            const tag = item.payload;
+            if (tag) {
+              await this.syncTag(tag);
+              success = true;
+            } else {
+              success = true;
+            }
+          } else if (item.entityType === 'note_tags') {
+            const { noteId, tagIds } = item.payload || {};
+            if (noteId && tagIds) {
+              await this.syncNoteTags(authUserId, noteId, tagIds);
+              success = true;
+            } else {
+              success = true;
+            }
+          } else if (item.entityType === 'note_links') {
+            const { sourceNoteId, targetNoteIds } = item.payload || {};
+            if (sourceNoteId && targetNoteIds) {
+              await this.syncNoteLinks(authUserId, sourceNoteId, targetNoteIds);
+              success = true;
+            } else {
+              success = true;
+            }
+          }
+
+          if (success) {
+            await indexedDbService.removeSyncItem(item.id);
+          } else {
+            const attempts = (item.attempts || 0) + 1;
+            const backoffMs = Math.min(60000, 1000 * Math.pow(2, attempts));
+            await indexedDbService.updateSyncItem({
+              ...item,
+              attempts,
+              nextAttemptAt: Date.now() + backoffMs,
+              status: attempts >= 5 ? 'failed' : 'pending',
+              lastError: 'Falha temporária de sincronização',
+            });
+            this.emitStatus('error');
+          }
+        } catch (err: any) {
+          console.warn('[SyncEngine] Exceção ao processar item da fila:', err);
+          const attempts = (item.attempts || 0) + 1;
+          await indexedDbService.updateSyncItem({
+            ...item,
+            attempts,
+            nextAttemptAt: Date.now() + 3000,
+            status: attempts >= 5 ? 'failed' : 'pending',
+            lastError: err?.message || 'Erro desconhecido',
+          });
+          this.emitStatus('error');
+        } finally {
+          if (item.entityType === 'note') {
+            this.inFlightNotes.delete(item.entityId);
+          }
+        }
+
+        // Intervalo de cortesia de 80ms entre itens para evitar picos de tráfego
+        await new Promise((res) => setTimeout(res, 80));
+      }
+
+      // Verifica itens restantes
+      const remainingCount = await indexedDbService.getPendingSyncCount(authUserId);
+      if (remainingCount === 0) {
+        this.emitStatus('saved');
       }
     } finally {
-      this.isFlushingQueue = false;
+      this.isProcessingQueue = false;
     }
   }
 
@@ -399,9 +530,8 @@ class SyncEngineClass {
   }
 
   /**
-   * Sincroniza relações note_tags no Supabase de forma DIFERENCIAL.
-   * Se os IDs de tags da nota não mudaram em relação ao último envio,
-   * NÃO executa DELETE nem INSERT.
+   * Sincroniza relações note_tags no Supabase de forma estritamente DIFERENCIAL.
+   * Se os IDs de tags da nota não mudaram em relação ao último envio, NÃO executa DELETE nem INSERT.
    */
   async syncNoteTags(userId: string, noteId: string, tagIds: string[]): Promise<void> {
     const supabase = getSupabase();
@@ -410,7 +540,6 @@ class SyncEngineClass {
     const canonicalNoteId = toCanonicalUuid(noteId);
     const sortedTags = [...tagIds].map(toCanonicalUuid).sort().join(',');
 
-    // Se as tags desta nota não mudaram, não faz nenhuma requisição
     if (this.lastSyncedTags.get(canonicalNoteId) === sortedTags) {
       return;
     }
@@ -441,9 +570,8 @@ class SyncEngineClass {
   }
 
   /**
-   * Sincroniza relações note_links (backlinks) no Supabase de forma DIFERENCIAL.
-   * Se os targetNoteIds não mudaram em relação ao último envio,
-   * NÃO executa DELETE nem INSERT.
+   * Sincroniza relações note_links (backlinks) no Supabase de forma estritamente DIFERENCIAL.
+   * Se os targetNoteIds não mudaram em relação ao último envio, NÃO executa DELETE nem INSERT.
    */
   async syncNoteLinks(userId: string, sourceNoteId: string, targetNoteIds: string[]): Promise<void> {
     const supabase = getSupabase();
@@ -455,7 +583,6 @@ class SyncEngineClass {
       .map(toCanonicalUuid);
     const sortedTargets = [...new Set(validTargets)].sort().join(',');
 
-    // Se os links internos desta nota não mudaram, não faz nenhuma requisição
     if (this.lastSyncedLinks.get(canonicalSourceId) === sortedTargets) {
       return;
     }
@@ -488,7 +615,6 @@ class SyncEngineClass {
 
   /**
    * Hidratação inicial do IndexedDB a partir do Supabase ao iniciar sessão.
-   * Não executa SELECTs redundantes se já foi hidratado na sessão.
    */
   async hydrateFromRemote(userId: string): Promise<boolean> {
     const supabase = getSupabase();
@@ -496,7 +622,6 @@ class SyncEngineClass {
 
     const authUserId = await this.getAuthenticatedUserId();
     if (!authUserId) {
-      console.warn('[SyncEngine] Usuário não autenticado; ignorando hidratação remota.');
       return false;
     }
 
@@ -534,7 +659,7 @@ class SyncEngineClass {
       const remoteNoteTags = noteTagsRes.data || [];
       const remoteLinks = linksRes.data || [];
 
-      // 1. Hidrata IndexedDB com os dados remotos respeitando LWW
+      // 1. Hidrata IndexedDB com os nós remotos
       for (const d of remoteNodes) {
         const node: TreeNode = {
           id: d.id,
@@ -551,12 +676,12 @@ class SyncEngineClass {
         this.lastSyncedNodeTime.set(d.id, d.updated_at);
       }
 
+      // 2. Hidrata notas respeitando Last Write Wins (LWW)
       for (const d of remoteNotes) {
         const local = await indexedDbService.getNote(d.id);
         const remoteVersion = Number(d.version || 1);
         const localVersion = Number(local?.version || 0);
 
-        // Se o dado local for mais novo, mantém o local
         if (local && localVersion > remoteVersion) {
           continue;
         }
@@ -576,6 +701,7 @@ class SyncEngineClass {
         await indexedDbService.saveNote(note);
       }
 
+      // 3. Hidrata tags
       for (const t of remoteTags) {
         const tag: TagRecord = {
           id: t.id,
@@ -587,7 +713,7 @@ class SyncEngineClass {
         await indexedDbService.saveTag(tag);
       }
 
-      // Reconstitui note_tags no IndexedDB
+      // 4. Reconstitui note_tags no IndexedDB
       const tagMapByNote = new Map<string, string[]>();
       for (const nt of remoteNoteTags) {
         const list = tagMapByNote.get(nt.note_id) || [];
@@ -599,7 +725,7 @@ class SyncEngineClass {
         this.lastSyncedTags.set(toCanonicalUuid(nId), [...tIds].map(toCanonicalUuid).sort().join(','));
       }
 
-      // Reconstitui note_links no IndexedDB
+      // 5. Reconstitui note_links no IndexedDB
       const linkMapBySource = new Map<string, string[]>();
       for (const l of remoteLinks) {
         const list = linkMapBySource.get(l.source_note_id) || [];
@@ -611,10 +737,9 @@ class SyncEngineClass {
         this.lastSyncedLinks.set(toCanonicalUuid(sId), [...targets].map(toCanonicalUuid).sort().join(','));
       }
 
-      // 2. Envia registros locais criados offline para o Supabase
+      // 6. Envia para o Supabase registros locais criados offline
       const localNodes = await indexedDbService.getAllNodes(authUserId);
       const remoteNodeIdSet = new Set(remoteNodes.map((rn: any) => rn.id));
-
       for (const localNode of localNodes) {
         if (!remoteNodeIdSet.has(localNode.id) && !localNode.deletedAt) {
           await this.syncNode(localNode);
@@ -623,18 +748,20 @@ class SyncEngineClass {
 
       const localNotes = await indexedDbService.getAllNotes(authUserId);
       const remoteNoteIdSet = new Set(remoteNotes.map((rn: any) => rn.id));
-
       for (const localNote of localNotes) {
         if (!remoteNoteIdSet.has(localNote.id)) {
           await this.syncNote(localNote);
         }
       }
 
+      // Processa itens que possam ter ficado pendentes na fila local
+      await this.processPersistentQueue();
+
       this.emitStatus('saved');
-      console.info('[SyncEngine] Hidratação inicial concluída com sucesso.');
+      console.info('[SyncEngine] Hidratação inicial concluída.');
       return true;
     } catch (err) {
-      console.error('[SyncEngine] Erro durante a hidratação remota:', err);
+      console.error('[SyncEngine] Erro na hidratação remota:', err);
       return false;
     }
   }

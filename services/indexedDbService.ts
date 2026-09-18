@@ -1,7 +1,7 @@
-import { TreeNode, NoteRecord, TagRecord, NoteLinkRecord, AttachmentRecord, AppUser } from '@/types';
+import { TreeNode, NoteRecord, TagRecord, NoteLinkRecord, AttachmentRecord, AppUser, SyncQueueItem } from '@/types';
 
 const DB_NAME = 'DigitalTactilityDB';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let dbPromise: Promise<IDBDatabase> | null = null;
 
@@ -68,6 +68,15 @@ function getDB(): Promise<IDBDatabase> {
         // 7. App State / Local User store
         if (!db.objectStoreNames.contains('user_session')) {
           db.createObjectStore('user_session', { keyPath: 'key' });
+        }
+
+        // 8. Persistent Sync Queue store (para fila de persistência offline/online resiliente)
+        if (!db.objectStoreNames.contains('sync_queue')) {
+          const syncQueueStore = db.createObjectStore('sync_queue', { keyPath: 'id' });
+          syncQueueStore.createIndex('userId', 'userId', { unique: false });
+          syncQueueStore.createIndex('status', 'status', { unique: false });
+          syncQueueStore.createIndex('entityId', 'entityId', { unique: false });
+          syncQueueStore.createIndex('createdAt', 'createdAt', { unique: false });
         }
       };
 
@@ -401,12 +410,143 @@ export const indexedDbService = {
     });
   },
 
+  // ====================================================================
+  // Persistent Sync Queue Operations (resiliente offline, reconexão e LWW)
+  // ====================================================================
+  async enqueueSyncItem(item: SyncQueueItem): Promise<void> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('sync_queue', 'readwrite');
+      const store = tx.objectStore('sync_queue');
+
+      // Busca item pendente existente para o mesmo entityId
+      const req = store.openCursor();
+      let foundExisting = false;
+
+      req.onsuccess = (e) => {
+        const cursor = (e.target as IDBRequest).result as IDBCursorWithValue;
+        if (cursor) {
+          const val = cursor.value as SyncQueueItem;
+          if (val.userId === item.userId && val.entityId === item.entityId && val.status === 'pending') {
+            foundExisting = true;
+            // Coalescing: se a versão nova for igual ou mais recente, substitui o payload e atualiza version
+            if (item.version >= (val.version || 0)) {
+              const updatedItem: SyncQueueItem = {
+                ...val,
+                payload: item.payload,
+                version: item.version,
+                updatedAt: new Date().toISOString(),
+                attempts: 0,
+                nextAttemptAt: 0,
+                lastError: undefined,
+              };
+              cursor.update(updatedItem);
+            }
+            // Se já encontrou, não precisa continuar iterando
+            return;
+          }
+          cursor.continue();
+        } else {
+          // Se não encontrou item pendente pré-existente para esta entidade, insere novo
+          if (!foundExisting) {
+            const newItem: SyncQueueItem = {
+              ...item,
+              id: item.id || crypto.randomUUID(),
+              status: 'pending',
+              attempts: 0,
+              nextAttemptAt: 0,
+              createdAt: item.createdAt || new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            };
+            store.put(newItem);
+          }
+        }
+      };
+
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
+  async getPendingSyncItems(userId: string): Promise<SyncQueueItem[]> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('sync_queue', 'readonly');
+      const store = tx.objectStore('sync_queue');
+      const req = store.openCursor();
+      const results: SyncQueueItem[] = [];
+      const now = Date.now();
+
+      req.onsuccess = (e) => {
+        const cursor = (e.target as IDBRequest).result as IDBCursorWithValue;
+        if (cursor) {
+          const val = cursor.value as SyncQueueItem;
+          if (val.userId === userId) {
+            if (val.status === 'pending' || (val.status === 'failed' && (val.nextAttemptAt || 0) <= now)) {
+              results.push(val);
+            }
+          }
+          cursor.continue();
+        } else {
+          // Ordena por data de criação para processar cronologicamente
+          results.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+          resolve(results);
+        }
+      };
+
+      req.onerror = () => reject(tx.error);
+    });
+  },
+
+  async updateSyncItem(item: SyncQueueItem): Promise<void> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('sync_queue', 'readwrite');
+      const store = tx.objectStore('sync_queue');
+      store.put(item);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
+  async removeSyncItem(id: string): Promise<void> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('sync_queue', 'readwrite');
+      const store = tx.objectStore('sync_queue');
+      store.delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
+  async getPendingSyncCount(userId: string): Promise<number> {
+    const items = await this.getPendingSyncItems(userId);
+    return items.length;
+  },
+
   /**
    * Migra identificadores legados (com prefixos node_, folder_, note_, tag_)
    * para UUIDs válidos e compatíveis com as tabelas do PostgreSQL no Supabase.
+   * Não roda repetidamente nem altera IDs que já sejam UUIDs válidos.
    */
   async migrateLegacyIds(userId: string): Promise<void> {
     const db = await getDB();
+
+    // 1. Verifica flag de migração já concluída para evitar trabalho repetido
+    const alreadyMigrated = await new Promise<boolean>((resolve) => {
+      try {
+        const tx = db.transaction('user_session', 'readonly');
+        const req = tx.objectStore('user_session').get(`legacy_migrated_${userId}`);
+        req.onsuccess = () => resolve(Boolean(req.result));
+        req.onerror = () => resolve(false);
+      } catch {
+        resolve(false);
+      }
+    });
+
+    if (alreadyMigrated) return;
+
     const nodes = await this.getAllNodes(userId);
     const notes = await this.getAllNotes(userId);
 
@@ -417,16 +557,26 @@ export const indexedDbService = {
       return uuidRegex.test(stripped) ? stripped.toLowerCase() : crypto.randomUUID();
     };
 
-    const needsMigration = nodes.some((n) => !uuidRegex.test(n.id) || (n.parentId && !uuidRegex.test(n.parentId))) ||
+    const needsMigration =
+      nodes.some((n) => !uuidRegex.test(n.id) || (n.parentId && !uuidRegex.test(n.parentId))) ||
       notes.some((nt) => !uuidRegex.test(nt.id) || !uuidRegex.test(nt.nodeId));
 
-    if (!needsMigration) return;
+    if (!needsMigration) {
+      // Marca como migrado e retorna
+      try {
+        const tx = db.transaction('user_session', 'readwrite');
+        tx.objectStore('user_session').put({ key: `legacy_migrated_${userId}`, migratedAt: new Date().toISOString() });
+      } catch (err) {
+        console.warn('[IndexedDB] Erro ao salvar flag de migração:', err);
+      }
+      return;
+    }
 
-    console.info('[IndexedDB] Migrando identificadores legados para UUIDs válidos...');
+    console.info('[IndexedDB] Migrando identificadores legados para UUIDs válidos com preservação de relações...');
 
     const nodeIdMap = new Map<string, string>();
     for (const n of nodes) {
-      const newId = toValidUuid(n.id);
+      const newId = uuidRegex.test(n.id) ? n.id : toValidUuid(n.id);
       nodeIdMap.set(n.id, newId);
     }
 
@@ -455,8 +605,8 @@ export const indexedDbService = {
     const noteTx = db.transaction('notes', 'readwrite');
     const noteStore = noteTx.objectStore('notes');
     for (const nt of notes) {
-      const newNoteId = toValidUuid(nt.id);
-      const newNodeId = nodeIdMap.get(nt.nodeId) || toValidUuid(nt.nodeId);
+      const newNoteId = uuidRegex.test(nt.id) ? nt.id : toValidUuid(nt.id);
+      const newNodeId = nodeIdMap.get(nt.nodeId) || (uuidRegex.test(nt.nodeId) ? nt.nodeId : toValidUuid(nt.nodeId));
 
       if (newNoteId !== nt.id || newNodeId !== nt.nodeId) {
         noteStore.delete(nt.id);
@@ -471,6 +621,12 @@ export const indexedDbService = {
       noteTx.oncomplete = () => res();
       noteTx.onerror = () => rej(noteTx.error);
     });
+
+    // 3. Marca como concluído
+    try {
+      const tx = db.transaction('user_session', 'readwrite');
+      tx.objectStore('user_session').put({ key: `legacy_migrated_${userId}`, migratedAt: new Date().toISOString() });
+    } catch {}
 
     console.info('[IndexedDB] Migração concluída com sucesso!');
   },

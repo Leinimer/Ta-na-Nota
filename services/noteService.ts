@@ -132,12 +132,41 @@ export const noteService = {
       await indexedDbService.saveNode(node);
     }
 
-    // 2. Extrai e sincroniza links internos e tags SOMENTE se houver diferença
-    await this.syncWikiLinks(existing.userId, existing.id, markdownContent);
-    await this.syncTags(existing.userId, existing.id, markdownContent);
-
-    // 3. Enfileira sincronização remota serializada e agrupada
+    // 2. Enfileira sincronização remota serializada e agrupada do conteúdo da nota
     await syncEngine.enqueueNoteSave(existing, node ?? undefined);
+
+    // 3. Agenda a extração e sincronização de tags e links de forma DESACOPLADA (fora do caminho crítico)
+    this.scheduleTagsAndLinksSync(existing.userId, existing.id, markdownContent);
+  },
+
+  // Mapas para debounce independente de tags e links
+  _tagsDebounceTimers: new Map<string, NodeJS.Timeout>(),
+  _linksDebounceTimers: new Map<string, NodeJS.Timeout>(),
+
+  scheduleTagsAndLinksSync(userId: string, noteId: string, markdown: string) {
+    // Debounce de WikiLinks (1000ms após cessar digitação)
+    const existingLinkTimer = this._linksDebounceTimers.get(noteId);
+    if (existingLinkTimer) clearTimeout(existingLinkTimer);
+
+    const linkTimer = setTimeout(() => {
+      this.syncWikiLinks(userId, noteId, markdown).catch((err) => {
+        console.warn('[noteService] Erro ao sincronizar wikilinks em background:', err);
+      });
+      this._linksDebounceTimers.delete(noteId);
+    }, 1200);
+    this._linksDebounceTimers.set(noteId, linkTimer);
+
+    // Debounce de Tags (1200ms após cessar digitação)
+    const existingTagTimer = this._tagsDebounceTimers.get(noteId);
+    if (existingTagTimer) clearTimeout(existingTagTimer);
+
+    const tagTimer = setTimeout(() => {
+      this.syncTags(userId, noteId, markdown).catch((err) => {
+        console.warn('[noteService] Erro ao sincronizar tags em background:', err);
+      });
+      this._tagsDebounceTimers.delete(noteId);
+    }, 1400);
+    this._tagsDebounceTimers.set(noteId, tagTimer);
   },
 
   async toggleFavorite(nodeId: string): Promise<boolean> {

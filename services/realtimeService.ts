@@ -2,6 +2,7 @@ import { getSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import { indexedDbService } from './indexedDbService';
 import { TreeNode, NoteRecord, TagRecord } from '@/types';
 import { RealtimeChannel } from '@supabase/supabase-js';
+import { MarkdownService } from './markdownService';
 
 export type RealtimeEventType = 'INSERT' | 'UPDATE' | 'DELETE';
 
@@ -251,13 +252,27 @@ class RealtimeServiceClass {
       }
     }
 
-    // 2. Dado remoto é mais recente: atualiza IndexedDB local
+    // 2. Dado remoto é mais recente: normaliza e sanitiza editorContent
+    let parsedEditorContent: any = row.editor_content;
+    if (typeof parsedEditorContent === 'string') {
+      try {
+        parsedEditorContent = JSON.parse(parsedEditorContent);
+      } catch {
+        parsedEditorContent = null;
+      }
+    }
+
+    // Se editorContent for inválido ou ausente, reconstrói a partir do markdown
+    if (!parsedEditorContent || typeof parsedEditorContent !== 'object' || !Array.isArray(parsedEditorContent.content)) {
+      parsedEditorContent = MarkdownService.markdownToVisual(row.markdown_content || '', 'Nota');
+    }
+
     const updatedNote: NoteRecord = {
       id: row.id,
       nodeId: row.node_id,
       userId: row.user_id,
       markdownContent: row.markdown_content || '',
-      editorContent: row.editor_content || null,
+      editorContent: parsedEditorContent,
       isFavorite: Boolean(row.is_favorite),
       lastOpenedAt: row.last_opened_at,
       version: remoteVersion,

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { TreeNode, NoteRecord, TagRecord, AppUser, SyncStatus } from '@/types';
 import { authService } from '@/services/authService';
 import { nodeService } from '@/services/nodeService';
@@ -12,6 +12,7 @@ import { realtimeService } from '@/services/realtimeService';
 import { indexedDbService } from '@/services/indexedDbService';
 import { Sidebar } from './sidebar/Sidebar';
 import { NoteEditor } from './editor/NoteEditor';
+import { EditorErrorBoundary } from './editor/EditorErrorBoundary';
 import { CommandPalette } from './command-palette/CommandPalette';
 import { AuthModal } from './auth/AuthModal';
 import { AuthScreen } from './auth/AuthScreen';
@@ -153,30 +154,47 @@ export function AppShell() {
     return unsub;
   }, []);
 
-  // Assinatura única de sincronização remota via Supabase Realtime
-  useEffect(() => {
-    if (!currentUser) return;
+  // Mantém refs atualizadas para evitar re-execução desnecessária do canal Realtime
+  const activeNodeRef = useRef<TreeNode | null>(activeNode);
+  const activeNoteRef = useRef<NoteRecord | null>(activeNote);
 
-    realtimeService.subscribe(currentUser.id);
+  useEffect(() => {
+    activeNodeRef.current = activeNode;
+  }, [activeNode]);
+
+  useEffect(() => {
+    activeNoteRef.current = activeNote;
+  }, [activeNote]);
+
+  // Assinatura única de sincronização remota via Supabase Realtime por sessão de usuário
+  // NUNCA recria a conexão quando activeNode ou activeNote mudam
+  useEffect(() => {
+    if (!currentUser?.id) return;
+
+    const userId = currentUser.id;
+    realtimeService.subscribe(userId);
 
     const unsubRealtime = realtimeService.addListener(async (event) => {
       try {
+        const currentActiveNode = activeNodeRef.current;
+        const currentActiveNote = activeNoteRef.current;
+
         if (event.type === 'node') {
-          const updatedTree = await nodeService.getTree(currentUser.id);
+          const updatedTree = await nodeService.getTree(userId);
           setTree(updatedTree);
 
-          if (event.eventType === 'DELETE' && activeNode && activeNode.id === event.nodeId) {
+          if (event.eventType === 'DELETE' && currentActiveNode && currentActiveNode.id === event.nodeId) {
             setActiveNode(null);
             setActiveNote(null);
-          } else if (event.node && activeNode && activeNode.id === event.node.id) {
+          } else if (event.node && currentActiveNode && currentActiveNode.id === event.node.id) {
             setActiveNode((prev) => (prev ? { ...prev, ...event.node } : null));
           }
         } else if (event.type === 'note') {
-          if (activeNote && activeNote.id === event.note?.id && event.note) {
+          if (currentActiveNote && currentActiveNote.id === event.note?.id && event.note) {
             setActiveNote(event.note);
           }
         } else if (event.type === 'tag' || event.type === 'relation') {
-          const updatedTags = await tagService.getTagsWithCount(currentUser.id);
+          const updatedTags = await tagService.getTagsWithCount(userId);
           setTags(updatedTags);
         }
       } catch (err) {
@@ -188,7 +206,7 @@ export function AppShell() {
       unsubRealtime();
       realtimeService.unsubscribe();
     };
-  }, [currentUser, activeNode, activeNote]);
+  }, [currentUser?.id]);
 
   // 3. Tree expansion
   const toggleFolderExpand = (folderId: string) => {
@@ -531,20 +549,21 @@ export function AppShell() {
 
         {/* Note Editor or Empty Selection State */}
         {activeNode && activeNote ? (
-          <NoteEditor
-            key={activeNode.id}
-            node={activeNode}
-            note={activeNote}
-            syncStatus={syncStatus}
-            onUpdateTitle={handleRenameNode}
-            onSaveContent={handleSaveContent}
-            onToggleFavorite={handleToggleFavorite}
-            onDeleteNote={handleDeleteNode}
-            onDuplicateNote={handleDuplicateNote}
-            onExportNote={handleExportNote}
-            onNavigateToNote={selectNodeById}
-            onTagClick={handleTagClick}
-          />
+          <EditorErrorBoundary key={activeNode.id} fallbackTitle={activeNode.name}>
+            <NoteEditor
+              node={activeNode}
+              note={activeNote}
+              syncStatus={syncStatus}
+              onUpdateTitle={handleRenameNode}
+              onSaveContent={handleSaveContent}
+              onToggleFavorite={handleToggleFavorite}
+              onDeleteNote={handleDeleteNode}
+              onDuplicateNote={handleDuplicateNote}
+              onExportNote={handleExportNote}
+              onNavigateToNote={selectNodeById}
+              onTagClick={handleTagClick}
+            />
+          </EditorErrorBoundary>
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-[#F9F7F2]">
             <div className="max-w-md space-y-4">
