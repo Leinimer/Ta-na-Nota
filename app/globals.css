@@ -289,7 +289,9 @@
 }
 
 /* Document Title styling & placeholder */
-.document-title-wrapper h1:empty::before {
+.document-title-wrapper [data-node-view-content]:empty::before,
+.document-title-wrapper h1:empty::before,
+.document-title-wrapper div:empty::before {
   content: "Sem título";
   color: rgba(140, 123, 110, 0.35);
   pointer-events: none;

@@ -29,7 +29,7 @@ export class MarkdownService {
    * Converts generic Markdown string into Tiptap JSON document.
    * Ensures the very first element is always the documentTitle.
    */
-  static markdownToVisual(markdown: string, defaultTitle: string = 'Nova nota'): any {
+  static markdownToVisual(markdown: string, defaultTitle: string = ''): any {
     if (!markdown || !markdown.trim()) {
       return {
         type: 'doc',
@@ -48,18 +48,18 @@ export class MarkdownService {
     let i = 0;
     let hasTitle = false;
 
-    // Check if first non-empty line is # Title
+    // Check if first non-empty line starts with #
     while (i < lines.length && !lines[i].trim()) {
       i++;
     }
 
     if (i < lines.length) {
-      const firstLine = lines[i].trim();
-      const titleMatch = firstLine.match(/^#\s+(.*)$/);
-      if (titleMatch) {
+      const rawFirstLine = lines[i];
+      if (/^#\s*/.test(rawFirstLine.trimStart())) {
+        const titleText = rawFirstLine.trimStart().replace(/^#\s*/, '');
         content.push({
           type: 'documentTitle',
-          content: this.parseInlineText(titleMatch[1].trim() || defaultTitle),
+          content: this.parseInlineText(titleText),
         });
         hasTitle = true;
         i++;
@@ -348,7 +348,7 @@ export class MarkdownService {
     switch (node.type) {
       case 'documentTitle': {
         const text = this.renderInlineContent(node.content);
-        return `# ${text || 'Nova nota'}`;
+        return `# ${text || ''}`;
       }
 
       case 'heading': {

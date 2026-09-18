@@ -4,6 +4,31 @@ import { getSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import { MarkdownService } from './markdownService';
 import { syncEngine, toCanonicalUuid } from './syncEngine';
 
+export function extractTitleFromEditorContent(editorContent: any, markdownContent?: string): string {
+  if (editorContent && typeof editorContent === 'object' && Array.isArray(editorContent.content)) {
+    const firstNode = editorContent.content[0];
+    if (firstNode && firstNode.type === 'documentTitle') {
+      if (Array.isArray(firstNode.content)) {
+        return firstNode.content.map((c: any) => c.text || '').join('');
+      }
+      if (typeof firstNode.text === 'string') {
+        return firstNode.text;
+      }
+      return '';
+    }
+  }
+
+  // Fallback para markdown se não houver editorContent estruturado
+  if (markdownContent) {
+    const match = markdownContent.match(/^#\s*(.*)$/m);
+    if (match) {
+      return match[1];
+    }
+  }
+
+  return '';
+}
+
 export const noteService = {
   async getNoteByNodeId(nodeId: string): Promise<{ node: TreeNode; note: NoteRecord } | null> {
     const canonicalNodeId = toCanonicalUuid(nodeId);
@@ -35,7 +60,7 @@ export const noteService = {
               nodeId: data.node_id,
               userId: data.user_id,
               markdownContent: data.markdown_content || '',
-              editorContent: data.editor_content || MarkdownService.markdownToVisual(data.markdown_content || ''),
+              editorContent: data.editor_content || MarkdownService.markdownToVisual(data.markdown_content || '', node.name ?? ''),
               isFavorite: Boolean(data.is_favorite),
               lastOpenedAt: data.last_opened_at,
               version: Number(data.version || 1),
@@ -54,13 +79,13 @@ export const noteService = {
       // Cria registro vazio se o nó existe mas a nota não havia sido inicializada
       const now = new Date().toISOString();
       const newNoteId = crypto.randomUUID();
-      const finalMd = `# ${node.name || 'Nova nota'}\n\n`;
+      const finalMd = `# ${node.name ?? ''}\n\n`;
       note = {
         id: newNoteId,
         nodeId: node.id,
         userId: node.userId,
         markdownContent: finalMd,
-        editorContent: MarkdownService.markdownToVisual(finalMd, node.name || 'Nova nota'),
+        editorContent: MarkdownService.markdownToVisual(finalMd, node.name ?? ''),
         isFavorite: false,
         lastOpenedAt: now,
         version: 1,
@@ -124,12 +149,22 @@ export const noteService = {
       existing.version = (existing.version || 1) + 1;
     }
 
+    // Extrai o título canônico da nota diretamente do primeiro nó documentTitle
+    const extractedTitle = extractTitleFromEditorContent(editorContent, markdownContent);
+
     // 1. Persistência local imediata no IndexedDB (sem latência na digitação)
     await indexedDbService.saveNote(existing);
 
     if (node) {
+      node.name = extractedTitle;
       node.updatedAt = now;
       await indexedDbService.saveNode(node);
+
+      console.log('[NODE TITLE PERSISTED]', {
+        nodeId: node.id,
+        title: node.name,
+        version: existing.version,
+      });
     }
 
     // 2. Enfileira sincronização remota serializada e agrupada do conteúdo da nota

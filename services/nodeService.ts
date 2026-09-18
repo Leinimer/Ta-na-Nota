@@ -154,7 +154,7 @@ export const nodeService = {
   async renameNode(nodeId: string, newName: string): Promise<void> {
     const node = await indexedDbService.getNode(nodeId);
     if (!node) return;
-    node.name = newName.trim() || node.name;
+    node.name = newName.trim();
     node.updatedAt = new Date().toISOString();
     await indexedDbService.saveNode(node);
 

@@ -53,7 +53,7 @@ export function NoteEditor({
   onTagClick,
 }: NoteEditorProps) {
   const [mode, setMode] = useState<'visual' | 'markdown'>('visual');
-  const titleRef = useRef(node.name || 'Nova nota');
+  const titleRef = useRef(node.name ?? '');
 
   // Refs para controle estrito e separação entre edição local e dados remotos
   const localEditRevisionRef = useRef(0);
@@ -72,7 +72,7 @@ export function NoteEditor({
     lastPersistedUpdatedAtRef.current = note.updatedAt || '';
     lastPersistedMarkdownRef.current = note.markdownContent || '';
     lastEditedMarkdownRef.current = note.markdownContent || '';
-    titleRef.current = node.name || 'Nova nota';
+    titleRef.current = node.name ?? '';
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
@@ -83,10 +83,10 @@ export function NoteEditor({
   // Ensure markdownContent has # Title as the first element
   const getInitialMarkdown = () => {
     const raw = note.markdownContent || '';
-    if (/^#\s+/m.test(raw)) {
+    if (/^#\s*/m.test(raw)) {
       return raw;
     }
-    return `# ${node.name || 'Nova nota'}\n\n${raw}`.trim();
+    return `# ${node.name ?? ''}\n\n${raw}`.trim();
   };
 
   const [markdownContent, setMarkdownContent] = useState(getInitialMarkdown);
@@ -131,7 +131,7 @@ export function NoteEditor({
     } catch (err) {
       console.warn('[NoteEditor] Falha ao processar editorContent inicial:', err);
     }
-    return MarkdownService.markdownToVisual(getInitialMarkdown(), node.name || 'Nova nota');
+    return MarkdownService.markdownToVisual(getInitialMarkdown(), node.name ?? '');
   };
 
   // Handle direct image file upload through storage service (NEVER as Base64 in JSON/Markdown)
@@ -209,6 +209,7 @@ export function NoteEditor({
           }
           console.log('[EDITOR LOCAL SAVE]', {
             noteId: node.id,
+            title: titleRef.current,
             version: lastPersistedVersionRef.current,
             updatedAt: lastPersistedUpdatedAtRef.current,
           });
@@ -352,6 +353,10 @@ export function NoteEditor({
           const currentText = firstNode.textContent;
           if (currentText !== titleRef.current) {
             titleRef.current = currentText;
+            console.log('[EDITOR TITLE UPDATE]', {
+              noteId: node.id,
+              title: currentText,
+            });
             onUpdateTitle(node.id, currentText);
           }
         }
@@ -362,24 +367,36 @@ export function NoteEditor({
     [note.id]
   );
 
-  // Sincroniza alteração de nome vinda da sidebar diretamente no primeiro bloco documentTitle do Tiptap via transação atômica
+  // Sincroniza alteração EXTERNA de nome (ex: renomeação pela sidebar)
+  // Diretamente no primeiro bloco documentTitle do Tiptap via transação atômica
   useEffect(() => {
-    const newName = node.name || 'Nova nota';
-    if (newName !== titleRef.current) {
-      titleRef.current = newName;
-      if (editor && !editor.isDestroyed) {
-        const firstNode = editor.state.doc.firstChild;
-        if (firstNode && firstNode.type.name === 'documentTitle' && firstNode.textContent !== newName) {
-          const { tr } = editor.state;
-          const from = 1;
-          const to = firstNode.nodeSize - 1;
-          if (to >= from) {
-            tr.replaceWith(from, to, newName ? editor.schema.text(newName) : []);
-          } else if (newName) {
-            tr.insert(from, editor.schema.text(newName));
-          }
-          editor.view.dispatch(tr);
+    const externalName = node.name ?? '';
+    // 1. Se o nome externo for idêntico ao que o editor já tem em titleRef.current, NÃO faz nada (evita eco da própria digitação)
+    if (externalName === titleRef.current) {
+      return;
+    }
+
+    // 2. Se o editor estiver ativo e o usuário estiver focado no documentTitle, a edição local é soberana
+    if (editor && !editor.isDestroyed) {
+      if (editor.isFocused) {
+        const { $from } = editor.state.selection;
+        if ($from.parent.type.name === 'documentTitle') {
+          return;
         }
+      }
+
+      const firstNode = editor.state.doc.firstChild;
+      if (firstNode && firstNode.type.name === 'documentTitle' && firstNode.textContent !== externalName) {
+        titleRef.current = externalName;
+        const { tr } = editor.state;
+        const from = 1;
+        const to = firstNode.nodeSize - 1;
+        if (to >= from) {
+          tr.replaceWith(from, to, externalName ? editor.schema.text(externalName) : []);
+        } else if (externalName) {
+          tr.insert(from, editor.schema.text(externalName));
+        }
+        editor.view.dispatch(tr);
       }
     }
   }, [node.name, editor]);
@@ -454,7 +471,7 @@ export function NoteEditor({
           }
         }
         if (!newJson || typeof newJson !== 'object' || newJson.type !== 'doc' || !Array.isArray(newJson.content)) {
-          newJson = MarkdownService.markdownToVisual(incomingMd, node.name || 'Nova nota');
+          newJson = MarkdownService.markdownToVisual(incomingMd, node.name ?? '');
         }
 
         const newDocNode = editor.schema.nodeFromJSON(newJson);
@@ -496,7 +513,7 @@ export function NoteEditor({
     } else {
       // Switching from markdown to visual
       if (editor) {
-        const json = MarkdownService.markdownToVisual(markdownContent, node.name || 'Nova nota');
+        const json = MarkdownService.markdownToVisual(markdownContent, node.name ?? '');
         editor.commands.setContent(json);
       }
     }
@@ -509,16 +526,20 @@ export function NoteEditor({
     setTags(MarkdownService.extractTags(newMd));
 
     // Extract title from first # in markdown mode
-    const titleMatch = newMd.trim().match(/^#\s+(.*)$/m);
-    if (titleMatch && titleMatch[1].trim()) {
-      const extractedTitle = titleMatch[1].trim();
+    const titleMatch = newMd.trim().match(/^#\s*(.*)$/m);
+    if (titleMatch) {
+      const extractedTitle = titleMatch[1];
       if (extractedTitle !== titleRef.current) {
         titleRef.current = extractedTitle;
+        console.log('[EDITOR TITLE UPDATE]', {
+          noteId: node.id,
+          title: extractedTitle,
+        });
         onUpdateTitle(node.id, extractedTitle);
       }
     }
 
-    const json = MarkdownService.markdownToVisual(newMd, node.name || 'Nova nota');
+    const json = MarkdownService.markdownToVisual(newMd, node.name ?? '');
     triggerSave(newMd, json);
   };
 

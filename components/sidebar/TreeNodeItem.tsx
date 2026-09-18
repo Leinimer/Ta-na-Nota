@@ -200,9 +200,9 @@ export function TreeNodeItem({
               e.stopPropagation();
               setIsLocalEditing(true);
             }}
-            className="flex-1 truncate text-xs sm:text-sm tracking-tight"
+            className={`flex-1 truncate text-xs sm:text-sm tracking-tight ${!node.name ? 'text-[#8C7B6E]/70 italic' : ''}`}
           >
-            {node.name}
+            {node.name || (isFolder ? 'Nova pasta' : 'Sem título')}
           </span>
         )}
 

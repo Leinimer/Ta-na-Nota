@@ -250,6 +250,11 @@ export function AppShell() {
         const currentActiveNote = activeNoteRef.current;
 
         if (event.type === 'node') {
+          console.log('[REALTIME NODE TITLE]', {
+            nodeId: event.nodeId || event.node?.id,
+            name: event.node?.name,
+            eventType: event.eventType,
+          });
           const updatedTree = await nodeService.getTree(userId);
           setTree(updatedTree);
 
@@ -257,6 +262,9 @@ export function AppShell() {
             setActiveNode(null);
             setActiveNote(null);
           } else if (event.node && currentActiveNode && currentActiveNode.id === event.node.id) {
+            if (activeNodeRef.current) {
+              activeNodeRef.current = { ...activeNodeRef.current, ...event.node };
+            }
             setActiveNode((prev) => (prev ? { ...prev, ...event.node } : null));
           }
         } else if (event.type === 'note') {
@@ -356,7 +364,7 @@ export function AppShell() {
   // 6. Rename Node (via Sidebar inline edit ou menu)
   const handleRenameNode = async (nodeId: string, newName: string) => {
     if (!currentUser) return;
-    const finalName = newName.trim() || 'Nova nota';
+    const finalName = newName.trim();
 
     // 1. Atualização otimista imediata na árvore da Sidebar (0ms)
     setTree((prevTree) => updateNodeNameInTree(prevTree, nodeId, finalName));
@@ -375,12 +383,9 @@ export function AppShell() {
     }
   };
 
-  // Timer ref para debounce de persistência na digitação do título da nota
-  const renameDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
-
   // 6b. Live Title Update (digitação no título da nota com resposta visual instantânea e 0 recriações de nó)
   const handleUpdateTitleLive = (nodeId: string, newTitle: string) => {
-    const displayName = newTitle || 'Nova nota';
+    const displayName = newTitle;
 
     // 1. Atualização imediata em memória na árvore (Sidebar atualiza em 0ms)
     setTree((prevTree) => updateNodeNameInTree(prevTree, nodeId, displayName));
@@ -389,18 +394,6 @@ export function AppShell() {
     if (activeNodeRef.current && activeNodeRef.current.id === nodeId) {
       activeNodeRef.current.name = displayName;
     }
-
-    // 2. Debounce na gravação no IndexedDB e na sync_queue para evitar sobrecarga de I/O
-    if (renameDebounceTimerRef.current) {
-      clearTimeout(renameDebounceTimerRef.current);
-    }
-    renameDebounceTimerRef.current = setTimeout(async () => {
-      try {
-        await nodeService.renameNode(nodeId, displayName);
-      } catch (err) {
-        console.warn('Error saving renamed note from editor:', err);
-      }
-    }, 350);
   };
 
   // 7. Delete Node
