@@ -38,7 +38,7 @@ export const noteService = {
               editorContent: data.editor_content || MarkdownService.markdownToVisual(data.markdown_content || ''),
               isFavorite: Boolean(data.is_favorite),
               lastOpenedAt: data.last_opened_at,
-              version: data.version || 1,
+              version: Number(data.version || 1),
               createdAt: data.created_at,
               updatedAt: data.updated_at,
             };
@@ -68,17 +68,23 @@ export const noteService = {
         updatedAt: now,
       };
       await indexedDbService.saveNote(note);
-      // Sincroniza imediatamente com o Supabase
       await syncEngine.syncNote(note);
     }
 
-    // Atualiza last_opened_at
+    // Atualiza last_opened_at localmente
     note.lastOpenedAt = new Date().toISOString();
     await indexedDbService.saveNote(note);
 
     return { node, note };
   },
 
+  /**
+   * Salva conteúdo da nota de forma otimizada:
+   * 1. IndexedDB local de resposta instantânea
+   * 2. Incrementa versão e atualiza timestamp
+   * 3. Sincroniza tags e links SOMENTE se houver mudança real
+   * 4. Enfileira sincronização serializada no Supabase
+   */
   async saveNote(
     nodeId: string,
     markdownContent: string,
@@ -118,7 +124,7 @@ export const noteService = {
       existing.version = (existing.version || 1) + 1;
     }
 
-    // 1. Persistência local imediata (sem latência na digitação)
+    // 1. Persistência local imediata no IndexedDB (sem latência na digitação)
     await indexedDbService.saveNote(existing);
 
     if (node) {
@@ -126,11 +132,11 @@ export const noteService = {
       await indexedDbService.saveNode(node);
     }
 
-    // 2. Extrai e sincroniza links internos ([[WikiLinks]]) e hashtags (#tags)
+    // 2. Extrai e sincroniza links internos e tags SOMENTE se houver diferença
     await this.syncWikiLinks(existing.userId, existing.id, markdownContent);
     await this.syncTags(existing.userId, existing.id, markdownContent);
 
-    // 3. Enfileira sincronização remota (serializada, sem duplicatas e com retry automático)
+    // 3. Enfileira sincronização remota serializada e agrupada
     await syncEngine.enqueueNoteSave(existing, node ?? undefined);
   },
 
@@ -149,6 +155,7 @@ export const noteService = {
 
     note.isFavorite = !note.isFavorite;
     note.updatedAt = new Date().toISOString();
+    note.version = (note.version || 1) + 1;
     await indexedDbService.saveNote(note);
 
     if (node) {
@@ -164,16 +171,11 @@ export const noteService = {
   },
 
   /**
-   * Identifica [[Nome da Nota]] no markdown, resolve IDs e atualiza note_links local e no Supabase.
+   * Sincroniza [[WikiLinks]] de forma estritamente diferencial.
+   * Não executa DELETE nem INSERT se os alvos não mudaram.
    */
   async syncWikiLinks(userId: string, sourceNoteId: string, markdown: string): Promise<void> {
     const titles = MarkdownService.extractWikiLinks(markdown);
-    if (titles.length === 0) {
-      await indexedDbService.setNoteLinks(userId, sourceNoteId, []);
-      await syncEngine.syncNoteLinks(userId, sourceNoteId, []);
-      return;
-    }
-
     const allNodes = await indexedDbService.getAllNodes(userId);
     const targetNoteIds: string[] = [];
 
@@ -183,10 +185,20 @@ export const noteService = {
       );
       if (targetNode) {
         const targetNote = await indexedDbService.getNoteByNodeId(targetNode.id);
-        if (targetNote && targetNote.id !== sourceNoteId) {
+        if (targetNote && targetNote.id !== sourceNoteId && !targetNoteIds.includes(targetNote.id)) {
           targetNoteIds.push(targetNote.id);
         }
       }
+    }
+
+    // Compara com os links atualmente salvos no IndexedDB
+    const currentLinks = await indexedDbService.getNoteLinksForSource(sourceNoteId);
+    const currentTargetIds = currentLinks.map((l) => l.targetNoteId).sort().join(',');
+    const newTargetIds = [...new Set(targetNoteIds)].sort().join(',');
+
+    // Se os links forem idênticos, não toca no banco
+    if (currentTargetIds === newTargetIds) {
+      return;
     }
 
     await indexedDbService.setNoteLinks(userId, sourceNoteId, targetNoteIds);
@@ -194,7 +206,8 @@ export const noteService = {
   },
 
   /**
-   * Identifica #tags no markdown, persiste novas tags e atualiza note_tags local e no Supabase.
+   * Sincroniza #tags de forma estritamente diferencial.
+   * Não executa DELETE nem INSERT se o conjunto de tags não mudou.
    */
   async syncTags(userId: string, noteId: string, markdown: string): Promise<void> {
     const tagsFromMd = MarkdownService.extractTags(markdown);
@@ -221,6 +234,15 @@ export const noteService = {
       if (!targetTagIds.includes(tagId)) {
         targetTagIds.push(tagId);
       }
+    }
+
+    // Compara com as tags atualmente vinculadas a esta nota
+    const currentTagIds = (await indexedDbService.getNoteTags(noteId)).slice().sort().join(',');
+    const newTagIds = [...new Set(targetTagIds)].slice().sort().join(',');
+
+    // Se as tags forem idênticas, não toca no banco
+    if (currentTagIds === newTagIds) {
+      return;
     }
 
     await indexedDbService.setNoteTags(userId, noteId, targetTagIds);

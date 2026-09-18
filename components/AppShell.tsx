@@ -8,6 +8,7 @@ import { noteService } from '@/services/noteService';
 import { tagService } from '@/services/tagService';
 import { exportService } from '@/services/exportService';
 import { syncEngine } from '@/services/syncEngine';
+import { realtimeService } from '@/services/realtimeService';
 import { indexedDbService } from '@/services/indexedDbService';
 import { Sidebar } from './sidebar/Sidebar';
 import { NoteEditor } from './editor/NoteEditor';
@@ -144,6 +145,51 @@ export function AppShell() {
     initUser();
   }, [refreshAppData]);
 
+  // Escuta status de sincronização emitido pelo syncEngine
+  useEffect(() => {
+    const unsub = syncEngine.onStatusChange((status) => {
+      setSyncStatus(status);
+    });
+    return unsub;
+  }, []);
+
+  // Assinatura única de sincronização remota via Supabase Realtime
+  useEffect(() => {
+    if (!currentUser) return;
+
+    realtimeService.subscribe(currentUser.id);
+
+    const unsubRealtime = realtimeService.addListener(async (event) => {
+      try {
+        if (event.type === 'node') {
+          const updatedTree = await nodeService.getTree(currentUser.id);
+          setTree(updatedTree);
+
+          if (event.eventType === 'DELETE' && activeNode && activeNode.id === event.nodeId) {
+            setActiveNode(null);
+            setActiveNote(null);
+          } else if (event.node && activeNode && activeNode.id === event.node.id) {
+            setActiveNode((prev) => (prev ? { ...prev, ...event.node } : null));
+          }
+        } else if (event.type === 'note') {
+          if (activeNote && activeNote.id === event.note?.id && event.note) {
+            setActiveNote(event.note);
+          }
+        } else if (event.type === 'tag' || event.type === 'relation') {
+          const updatedTags = await tagService.getTagsWithCount(currentUser.id);
+          setTags(updatedTags);
+        }
+      } catch (err) {
+        console.warn('[AppShell] Erro no processamento de evento realtime:', err);
+      }
+    });
+
+    return () => {
+      unsubRealtime();
+      realtimeService.unsubscribe();
+    };
+  }, [currentUser, activeNode, activeNote]);
+
   // 3. Tree expansion
   const toggleFolderExpand = (folderId: string) => {
     setExpandedFolders((prev) => {
@@ -264,10 +310,8 @@ export function AppShell() {
 
   // 11. Save Content (from Editor)
   const handleSaveContent = async (nodeId: string, md: string, json: any) => {
-    setSyncStatus('saving');
     try {
       await noteService.saveNote(nodeId, md, json);
-      setSyncStatus('saved');
       // refresh tags count in sidebar
       if (currentUser) {
         const updatedTags = await tagService.getTagsWithCount(currentUser.id);

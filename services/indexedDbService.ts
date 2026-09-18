@@ -148,6 +148,16 @@ export const indexedDbService = {
     }
   },
 
+  async deleteNode(id: string): Promise<void> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('nodes', 'readwrite');
+      tx.objectStore('nodes').delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
   // Notes
   async getNoteByNodeId(nodeId: string): Promise<NoteRecord | null> {
     const db = await getDB();
@@ -193,6 +203,16 @@ export const indexedDbService = {
     });
   },
 
+  async deleteNote(id: string): Promise<void> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('notes', 'readwrite');
+      tx.objectStore('notes').delete(id);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
   // Tags
   async getTags(userId: string): Promise<TagRecord[]> {
     const db = await getDB();
@@ -212,6 +232,16 @@ export const indexedDbService = {
     return new Promise((resolve, reject) => {
       const tx = db.transaction('tags', 'readwrite');
       tx.objectStore('tags').put(tag);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
+  async deleteTag(id: string): Promise<void> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('tags', 'readwrite');
+      tx.objectStore('tags').delete(id);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });
@@ -253,6 +283,17 @@ export const indexedDbService = {
   },
 
   // Note Links (Backlinks)
+  async getNoteLinksForSource(sourceNoteId: string): Promise<NoteLinkRecord[]> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('note_links', 'readonly');
+      const index = tx.objectStore('note_links').index('sourceNoteId');
+      const req = index.getAll(sourceNoteId);
+      req.onsuccess = () => resolve(req.result || []);
+      req.onerror = () => reject(req.error);
+    });
+  },
+
   async getNoteLinksForTarget(targetNoteId: string): Promise<NoteLinkRecord[]> {
     const db = await getDB();
     return new Promise((resolve, reject) => {
@@ -297,6 +338,16 @@ export const indexedDbService = {
   },
 
   // Attachments
+  async getAttachment(id: string): Promise<AttachmentRecord | null> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('attachments', 'readonly');
+      const req = tx.objectStore('attachments').get(id);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error);
+    });
+  },
+
   async getAttachments(noteId: string): Promise<AttachmentRecord[]> {
     const db = await getDB();
     return new Promise((resolve, reject) => {

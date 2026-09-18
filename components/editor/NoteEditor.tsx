@@ -28,6 +28,7 @@ import {
   Eye,
   RefreshCw,
   CheckCircle2,
+  AlertCircle,
 } from 'lucide-react';
 
 function formatLastModifiedTime(isoDate?: string) {
@@ -67,6 +68,7 @@ export function NoteEditor({
 }: NoteEditorProps) {
   const [mode, setMode] = useState<'visual' | 'markdown'>('visual');
   const titleRef = useRef(node.name || 'Nova nota');
+  const lastKnownVersionRef = useRef<number>(note.version || 1);
 
   // Keep titleRef in sync with node.name if changed externally
   useEffect(() => {
@@ -111,7 +113,7 @@ export function NoteEditor({
     return MarkdownService.markdownToVisual(getInitialMarkdown(), node.name || 'Nova nota');
   };
 
-  // Handle direct image file upload from OS file picker (default width: 50%)
+  // Handle direct image file upload through storage service (NEVER as Base64 in JSON/Markdown)
   const handleUploadImage = async (file: File) => {
     if (!file) return;
     setIsUploading(true);
@@ -119,14 +121,18 @@ export function NoteEditor({
       const att = await attachmentService.uploadAttachment(node.userId, note.id, file);
       setAttachments((prev) => [...prev, att]);
       if (editor && att.url) {
-        editor.chain().focus().insertContent({
-          type: 'image',
-          attrs: {
-            src: att.url,
-            alt: file.name,
-            width: '50%',
-          },
-        }).run();
+        editor
+          .chain()
+          .focus()
+          .insertContent({
+            type: 'image',
+            attrs: {
+              src: att.url,
+              alt: file.name,
+              width: '50%',
+            },
+          })
+          .run();
       }
     } catch (err) {
       console.warn('Erro ao processar imagem:', err);
@@ -161,7 +167,7 @@ export function NoteEditor({
     };
   }, [note.id, note.markdownContent, node.userId]);
 
-  // Debounced autosave
+  // Debounced autosave (~400ms)
   const triggerSave = useCallback(
     (md: string, json: any) => {
       if (saveTimerRef.current) {
@@ -224,6 +230,36 @@ export function NoteEditor({
         attributes: {
           class: 'focus:outline-none min-h-[450px]',
         },
+        // Anti-Base64: intercepta colagem e soltura de arquivos para upload no Storage
+        handlePaste: (_view, event) => {
+          const items = event.clipboardData?.items;
+          if (items) {
+            for (const item of Array.from(items)) {
+              if (item.type.startsWith('image/')) {
+                const file = item.getAsFile();
+                if (file) {
+                  event.preventDefault();
+                  handleUploadImage(file);
+                  return true;
+                }
+              }
+            }
+          }
+          return false;
+        },
+        handleDrop: (_view, event) => {
+          const files = event.dataTransfer?.files;
+          if (files && files.length > 0) {
+            for (const file of Array.from(files)) {
+              if (file.type.startsWith('image/') || file.type === 'application/pdf') {
+                event.preventDefault();
+                handleUploadImage(file);
+                return true;
+              }
+            }
+          }
+          return false;
+        },
         handleDOMEvents: {
           mouseup: (view) => {
             if (highlightColorRef.current) {
@@ -258,6 +294,7 @@ export function NoteEditor({
         },
       },
       onUpdate: ({ editor: ed }) => {
+        lastKnownVersionRef.current = (lastKnownVersionRef.current || 1) + 1;
         const json = ed.getJSON();
         const md = MarkdownService.visualToMarkdown(json);
         setMarkdownContent(md);
@@ -278,6 +315,23 @@ export function NoteEditor({
     },
     [note.id]
   );
+
+  // Sincronização passiva de atualizações remotas via Realtime (sem disparar loop de salvamento)
+  useEffect(() => {
+    if (note.version && note.version > (lastKnownVersionRef.current || 0)) {
+      lastKnownVersionRef.current = note.version;
+      const newMd = note.markdownContent || '';
+      setMarkdownContent(newMd);
+      setTags(MarkdownService.extractTags(newMd));
+
+      if (editor && !editor.isFocused) {
+        const json =
+          note.editorContent || MarkdownService.markdownToVisual(newMd, node.name || 'Nova nota');
+        // A opção emitUpdate: false impede que o Tiptap dispare o evento 'onUpdate', evitando loop
+        editor.commands.setContent(json, { emitUpdate: false });
+      }
+    }
+  }, [note.id, note.version, note.updatedAt, editor, node.name, note.markdownContent, note.editorContent]);
 
   // Toggle between Visual and Raw Markdown mode
   const handleToggleMode = (newMode: 'visual' | 'markdown') => {
@@ -300,6 +354,7 @@ export function NoteEditor({
 
   // Handle Markdown raw edit
   const handleMarkdownChange = (newMd: string) => {
+    lastKnownVersionRef.current = (lastKnownVersionRef.current || 1) + 1;
     setMarkdownContent(newMd);
     setTags(MarkdownService.extractTags(newMd));
 
@@ -341,9 +396,9 @@ export function NoteEditor({
 
   return (
     <div id="note-editor-container" className="flex flex-col flex-1 h-full bg-[#F9F7F2] overflow-hidden">
-      {/* 1. Barra Superior - Nova Organização conforme item 13:
+      {/* 1. Barra Superior
           LADO ESQUERDO: [ Favorito ] [ Visual ] [ Markdown ]
-          LADO DIREITO: Salvo localmente • 16:22
+          LADO DIREITO: Status de sincronização (Salvando... | Sincronizado | Offline | Erro)
       */}
       <div
         id="note-top-bar"
@@ -363,7 +418,7 @@ export function NoteEditor({
             <Star className={`w-3.5 h-3.5 ${node.isFavorite ? 'fill-amber-500 text-amber-500' : ''}`} />
           </button>
 
-          {/* Alternância Visual e Markdown - Botões pequenos somente ícones */}
+          {/* Alternância Visual e Markdown */}
           <div className="flex items-center p-0.5 rounded-md bg-[#E3DCD2] border border-[#D9C5B2]/60">
             <button
               type="button"
@@ -396,7 +451,7 @@ export function NoteEditor({
           </div>
         </div>
 
-        {/* LADO DIREITO: Salvo localmente • Última modificação */}
+        {/* LADO DIREITO: Status de Sincronização & Horário */}
         <div className="flex items-center gap-2 text-xs text-[#8C7B6E] truncate">
           {syncStatus === 'saving' && (
             <span className="flex items-center gap-1.5 text-[11px] text-amber-700 font-medium">
@@ -405,12 +460,17 @@ export function NoteEditor({
           )}
           {syncStatus === 'saved' && (
             <span className="flex items-center gap-1.5 text-[11px] text-emerald-700 font-medium">
-              <CheckCircle2 className="w-3.5 h-3.5" /> Salvo localmente
+              <CheckCircle2 className="w-3.5 h-3.5" /> Sincronizado
             </span>
           )}
           {syncStatus === 'offline' && (
-            <span className="flex items-center gap-1.5 text-[11px] text-[#8C7B6E]/70 font-medium">
-              ● Offline
+            <span className="flex items-center gap-1.5 text-[11px] text-[#8C7B6E] font-medium">
+              ● Offline — salvo neste dispositivo
+            </span>
+          )}
+          {syncStatus === 'error' && (
+            <span className="flex items-center gap-1.5 text-[11px] text-rose-700 font-medium">
+              <AlertCircle className="w-3.5 h-3.5" /> Erro de sincronização
             </span>
           )}
 
