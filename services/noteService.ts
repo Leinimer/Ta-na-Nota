@@ -152,13 +152,12 @@ export const noteService = {
     // Extrai o título canônico da nota diretamente do primeiro nó documentTitle
     const extractedTitle = extractTitleFromEditorContent(editorContent, markdownContent);
 
-    // 1. Persistência local imediata no IndexedDB (sem latência na digitação)
-    await indexedDbService.saveNote(existing);
-
     if (node) {
       node.name = extractedTitle;
       node.updatedAt = now;
-      await indexedDbService.saveNode(node);
+
+      // 1. Persistência local atômica em transação única multi-store no IndexedDB
+      await indexedDbService.saveNoteAndNode(existing, node);
 
       console.log('[NODE LOCAL UPDATE]', {
         nodeId: node.id,
@@ -171,10 +170,14 @@ export const noteService = {
         title: node.name,
         version: existing.version,
       });
+    } else {
+      await indexedDbService.saveNote(existing);
     }
 
-    // 2. Enfileira sincronização remota serializada e agrupada do conteúdo da nota
-    await syncEngine.enqueueNoteSave(existing, node ?? undefined);
+    // 2. Enfileira sincronização remota serializada em background - FIRE-AND-FORGET
+    syncEngine.enqueueNoteSave(existing, node ?? undefined).catch((err) => {
+      console.warn('[noteService] Erro ao enfileirar salvamento de nota:', err);
+    });
 
     // 3. Agenda a extração e sincronização de tags e links de forma DESACOPLADA (fora do caminho crítico)
     this.scheduleTagsAndLinksSync(existing.userId, existing.id, markdownContent);
@@ -228,16 +231,21 @@ export const noteService = {
     note.isFavorite = !note.isFavorite;
     note.updatedAt = new Date().toISOString();
     note.version = (note.version || 1) + 1;
-    await indexedDbService.saveNote(note);
 
     if (node) {
       node.isFavorite = note.isFavorite;
       node.updatedAt = note.updatedAt;
-      await indexedDbService.saveNode(node);
-      await syncEngine.syncNode(node);
+      await indexedDbService.saveNoteAndNode(note, node);
+      syncEngine.enqueueNode(node).catch((err) => {
+        console.warn('[toggleFavorite] Falha ao enfileirar node favorito:', err);
+      });
+    } else {
+      await indexedDbService.saveNote(note);
     }
 
-    await syncEngine.syncNote(note);
+    syncEngine.enqueueNoteSave(note, node ?? undefined).catch((err) => {
+      console.warn('[toggleFavorite] Falha ao enfileirar note favorita:', err);
+    });
 
     return note.isFavorite;
   },

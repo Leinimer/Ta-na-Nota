@@ -149,6 +149,20 @@ export const indexedDbService = {
     });
   },
 
+  async saveNodesBatch(nodes: TreeNode[]): Promise<void> {
+    if (nodes.length === 0) return;
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('nodes', 'readwrite');
+      const store = tx.objectStore('nodes');
+      for (const node of nodes) {
+        store.put(node);
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
   async deleteNodeSoft(id: string): Promise<void> {
     const node = await this.getNode(id);
     if (node) {
@@ -207,6 +221,17 @@ export const indexedDbService = {
     return new Promise((resolve, reject) => {
       const tx = db.transaction('notes', 'readwrite');
       tx.objectStore('notes').put(note);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
+  async saveNoteAndNode(note: NoteRecord, node: TreeNode): Promise<void> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(['notes', 'nodes'], 'readwrite');
+      tx.objectStore('notes').put(note);
+      tx.objectStore('nodes').put(node);
       tx.oncomplete = () => resolve();
       tx.onerror = () => reject(tx.error);
     });

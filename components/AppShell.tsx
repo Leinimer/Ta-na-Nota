@@ -303,6 +303,7 @@ export function AppShell() {
         const user = await authService.getCurrentUser();
         setCurrentUser(user);
         if (user) {
+          syncEngine.setAuthenticatedUserId(user.id);
           await indexedDbService.migrateLegacyIds(user.id);
           await syncEngine.hydrateFromRemote(user.id);
           await refreshAppData(user.id);
@@ -434,10 +435,10 @@ export function AppShell() {
   const handleCreateFolder = async (parentId?: string | null) => {
     if (!currentUser) return;
     try {
-      const newFolder = await nodeService.createFolder(currentUser.id, 'Nova pasta', parentId || null);
       if (parentId) {
         setExpandedFolders((prev) => new Set(prev).add(parentId));
       }
+      const newFolder = await nodeService.createFolder(currentUser.id, 'Nova pasta', parentId || null);
       setTree((prev) => insertNodeIntoTree(prev, newFolder));
       setEditingNodeId(newFolder.id);
     } catch (err) {
@@ -449,12 +450,12 @@ export function AppShell() {
   const handleCreateNote = async (parentId?: string | null) => {
     if (!currentUser) return;
     try {
-      const defaultTitle = 'Nova nota';
-      const initialMd = `# ${defaultTitle}\n\n`;
-      const res = await nodeService.createNote(currentUser.id, defaultTitle, parentId || null, initialMd);
       if (parentId) {
         setExpandedFolders((prev) => new Set(prev).add(parentId));
       }
+      const defaultTitle = 'Nova nota';
+      const initialMd = `# ${defaultTitle}\n\n`;
+      const res = await nodeService.createNote(currentUser.id, defaultTitle, parentId || null, initialMd);
       setTree((prev) => insertNodeIntoTree(prev, res.node));
       selectNode(res.node);
     } catch (err) {
@@ -463,7 +464,7 @@ export function AppShell() {
   };
 
   // 6. Rename Node (via Sidebar inline edit ou menu)
-  const handleRenameNode = async (nodeId: string, newName: string) => {
+  const handleRenameNode = (nodeId: string, newName: string) => {
     if (!currentUser) return;
     const finalName = newName.trim();
 
@@ -476,12 +477,10 @@ export function AppShell() {
       setActiveNode((prev) => (prev && prev.id === nodeId ? { ...prev, name: finalName } : prev));
     }
 
-    // 3. Persistência no IndexedDB e sincronização em background
-    try {
-      await nodeService.renameNode(nodeId, finalName);
-    } catch (err) {
+    // 3. Persistência no IndexedDB e sincronização em background (não bloqueia UI)
+    nodeService.renameNode(nodeId, finalName).catch((err) => {
       console.warn('Error renaming node:', err);
-    }
+    });
   };
 
   // 6b. Live Title Update (digitação no título da nota com resposta visual instantânea e 0 recriações de nó)
@@ -498,19 +497,18 @@ export function AppShell() {
   };
 
   // 7. Delete Node
-  const handleDeleteNode = async (nodeId: string) => {
+  const handleDeleteNode = (nodeId: string) => {
     if (!currentUser) return;
-    try {
-      // Atualização imediata na árvore da UI (0ms)
-      setTree((prevTree) => removeNodeFromTree(prevTree, nodeId));
-      if (activeNode && activeNode.id === nodeId) {
-        setActiveNode(null);
-        setActiveNote(null);
-      }
-      await nodeService.deleteNode(nodeId);
-    } catch (err) {
-      console.warn('Error deleting node:', err);
+    // 1. Atualização imediata na árvore da UI (0ms)
+    setTree((prevTree) => removeNodeFromTree(prevTree, nodeId));
+    if (activeNode && activeNode.id === nodeId) {
+      setActiveNode(null);
+      setActiveNote(null);
     }
+    // 2. Persistência no IndexedDB e sincronização em background (não bloqueia UI)
+    nodeService.deleteNode(nodeId).catch((err) => {
+      console.warn('Error deleting node:', err);
+    });
   };
 
   // 8. Duplicate Note
@@ -528,7 +526,7 @@ export function AppShell() {
   };
 
   // 9. Move Node - Local-first com atualização otimista imediata na UI
-  const handleMoveNode = async (draggedId: string, targetParentId: string | null) => {
+  const handleMoveNode = (draggedId: string, targetParentId: string | null) => {
     if (!currentUser || draggedId === targetParentId) return;
 
     // Guarda estado anterior para possível rollback
@@ -549,30 +547,33 @@ export function AppShell() {
     }
 
     // 2. Persiste no IndexedDB e sincroniza em background (não bloqueia a UI)
-    try {
-      const success = await nodeService.moveNode(draggedId, targetParentId);
+    nodeService.moveNode(draggedId, targetParentId).then((success) => {
       if (!success) {
         // Rollback se a operação for inválida (ex: ciclo)
         setTree(previousTree);
       }
-    } catch (err) {
+    }).catch((err) => {
       console.warn('Error moving node:', err);
       setTree(previousTree);
-    }
+    });
   };
 
   // 10. Toggle Favorite
-  const handleToggleFavorite = async (nodeId: string) => {
+  const handleToggleFavorite = (nodeId: string) => {
     if (!currentUser) return;
-    try {
-      const isFav = await noteService.toggleFavorite(nodeId);
-      setTree((prevTree) => updateNodeInTree(prevTree, { id: nodeId, isFavorite: isFav }));
-      if (activeNode && activeNode.id === nodeId) {
-        setActiveNode((prev) => (prev ? { ...prev, isFavorite: isFav } : null));
-      }
-    } catch (err) {
-      console.warn('Error toggling favorite:', err);
+    const currentFav = activeNode && activeNode.id === nodeId ? !!activeNode.isFavorite : false;
+    const nextFav = !currentFav;
+
+    // 1. Atualização imediata do estado React
+    setTree((prevTree) => updateNodeInTree(prevTree, { id: nodeId, isFavorite: nextFav }));
+    if (activeNode && activeNode.id === nodeId) {
+      setActiveNode((prev) => (prev ? { ...prev, isFavorite: nextFav } : null));
     }
+
+    // 2. Persistência local e background sync
+    noteService.toggleFavorite(nodeId).catch((err) => {
+      console.warn('Error toggling favorite:', err);
+    });
   };
 
   // 11. Save Content (from Editor)
@@ -586,10 +587,13 @@ export function AppShell() {
         activeNoteRef.current.version = savedNote.version;
         activeNoteRef.current.updatedAt = savedNote.updatedAt;
       }
-      // refresh tags count in sidebar
+      // Atualização de contagem de tags DESACOPLADA (fora do caminho crítico)
       if (currentUser) {
-        const updatedTags = await tagService.getTagsWithCount(currentUser.id);
-        setTags(updatedTags);
+        tagService.getTagsWithCount(currentUser.id).then((updatedTags) => {
+          setTags(updatedTags);
+        }).catch((err) => {
+          console.warn('Error updating tags in background:', err);
+        });
       }
       return savedNote;
     } catch (err) {

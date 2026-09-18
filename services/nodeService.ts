@@ -89,8 +89,10 @@ export const nodeService = {
     // 1. Salva imediatamente no IndexedDB local
     await indexedDbService.saveNode(folderNode);
 
-    // 2. Sincroniza com o Supabase
-    await syncEngine.syncNode(folderNode);
+    // 2. Enfileira na sync_queue para sincronização em background (não bloqueia a UI)
+    syncEngine.enqueueNode(folderNode).catch((err) => {
+      console.warn('[nodeService] Falha ao enfileirar pasta criada:', err);
+    });
 
     return folderNode;
   },
@@ -140,13 +142,16 @@ export const nodeService = {
       updatedAt: now,
     };
 
-    // 1. Salva atomicamente no IndexedDB local
-    await indexedDbService.saveNode(node);
-    await indexedDbService.saveNote(noteRecord);
+    // 1. Salva atomicamente no IndexedDB local em transação multi-store
+    await indexedDbService.saveNoteAndNode(noteRecord, node);
 
-    // 2. Sincroniza imediatamente com o Supabase (node primeiro, depois a note)
-    await syncEngine.syncNode(node);
-    await syncEngine.syncNote(noteRecord);
+    // 2. Enfileira na sync_queue para sincronização em background (não bloqueia a UI)
+    syncEngine.enqueueNode(node).catch((err) => {
+      console.warn('[nodeService] Falha ao enfileirar nó da nova nota:', err);
+    });
+    syncEngine.enqueueNoteSave(noteRecord, node).catch((err) => {
+      console.warn('[nodeService] Falha ao enfileirar conteúdo da nova nota:', err);
+    });
 
     return { node, noteId };
   },
@@ -158,8 +163,10 @@ export const nodeService = {
     node.updatedAt = new Date().toISOString();
     await indexedDbService.saveNode(node);
 
-    // Sincroniza com o Supabase
-    await syncEngine.syncNode(node);
+    // Enfileira na sync_queue em background
+    syncEngine.enqueueNode(node).catch((err) => {
+      console.warn('[nodeService] Falha ao enfileirar renomeação de nó:', err);
+    });
   },
 
   async moveNode(nodeId: string, newParentId: string | null, newPosition?: number): Promise<boolean> {
@@ -196,13 +203,13 @@ export const nodeService = {
       updatedAt: node.updatedAt,
     });
 
-    // 3. Dispara sincronização remota em background sem bloquear a UI
+    // 3. Enfileira sincronização remota na fila persistente sem bloquear a UI
     console.log('[MOVE SYNC]', {
       nodeId: node.id,
       targetParentId: newParentId,
     });
-    syncEngine.syncNode(node).catch((err) => {
-      console.warn('[nodeService] Sincronização em background falhou para nó movido:', err);
+    syncEngine.enqueueNode(node).catch((err) => {
+      console.warn('[nodeService] Falha ao enfileirar movimentação de nó:', err);
     });
 
     // 4. Retorna resultado local imediatamente
@@ -215,24 +222,40 @@ export const nodeService = {
     if (!node) return;
 
     node.deletedAt = now;
-    await indexedDbService.saveNode(node);
-    await syncEngine.syncNode(node);
+    node.updatedAt = now;
 
-    // Se for uma pasta, marca recursivamente todos os nós filhos como excluídos
+    // Se for uma pasta, marca recursivamente todos os nós filhos como excluídos em lote
     if (node.type === 'folder') {
       const allNodes = await indexedDbService.getAllNodes(node.userId);
-      const markDescendants = async (parentId: string) => {
+      const affectedNodes: TreeNode[] = [node];
+
+      const collectDescendants = (parentId: string) => {
         const children = allNodes.filter((n) => n.parentId === parentId && !n.deletedAt);
         for (const child of children) {
           child.deletedAt = now;
-          await indexedDbService.saveNode(child);
-          await syncEngine.syncNode(child);
+          child.updatedAt = now;
+          affectedNodes.push(child);
           if (child.type === 'folder') {
-            await markDescendants(child.id);
+            collectDescendants(child.id);
           }
         }
       };
-      await markDescendants(nodeId);
+      collectDescendants(nodeId);
+
+      // Persiste todos os nós afetados em uma única transação no IndexedDB
+      await indexedDbService.saveNodesBatch(affectedNodes);
+
+      // Enfileira cada nó para sincronização em background
+      for (const affected of affectedNodes) {
+        syncEngine.enqueueNode(affected).catch((err) => {
+          console.warn('[nodeService] Falha ao enfileirar deleção de nó:', err);
+        });
+      }
+    } else {
+      await indexedDbService.saveNode(node);
+      syncEngine.enqueueNode(node).catch((err) => {
+        console.warn('[nodeService] Falha ao enfileirar deleção de nó:', err);
+      });
     }
   },
 

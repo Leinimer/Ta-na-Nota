@@ -27,6 +27,9 @@ class SyncEngineClass {
   private inFlightNodes = new Set<string>();
   private pendingNodeSaves = new Map<string, TreeNode>();
 
+  // Cache de usuário autenticado para evitar chamadas de rede no caminho de UI
+  private cachedUserId: string | null = null;
+
   // Dicionários em memória para evitar requisições redundantes de Tags, Links e Nodes
   private lastSyncedTags = new Map<string, string>(); // canonicalNoteId -> sortedTagIds
   private lastSyncedLinks = new Map<string, string>(); // canonicalSourceId -> sortedTargetIds
@@ -77,9 +80,19 @@ class SyncEngineClass {
   }
 
   /**
-   * Obtém o ID do usuário autenticado no Supabase com validação de sessão.
+   * Define o ID do usuário autenticado para evitar chamadas de rede desnecessárias.
+   */
+  setAuthenticatedUserId(userId: string | null) {
+    this.cachedUserId = userId;
+  }
+
+  /**
+   * Obtém o ID do usuário autenticado no Supabase com validação de sessão (com cache rápido).
    */
   async getAuthenticatedUserId(): Promise<string | null> {
+    if (this.cachedUserId) {
+      return this.cachedUserId;
+    }
     const supabase = getSupabase();
     if (!supabase || !isSupabaseConfigured) return null;
 
@@ -88,6 +101,7 @@ class SyncEngineClass {
       if (error || !user) {
         return null;
       }
+      this.cachedUserId = user.id;
       return user.id;
     } catch (err) {
       console.error('[SyncEngine] Falha ao verificar sessão do Supabase:', err);
@@ -173,17 +187,17 @@ class SyncEngineClass {
    * Evita chamadas repetidas caso o nó não tenha sofrido alterações recentes.
    * Possui controle de concorrência por nodeId para evitar corridas locais vs remotas.
    */
-  async syncNode(node: TreeNode, maxRetries: number = 2): Promise<void> {
+  async syncNode(node: TreeNode, maxRetries: number = 2): Promise<boolean> {
     const supabase = getSupabase();
-    if (!supabase || !isSupabaseConfigured) return;
+    if (!supabase || !isSupabaseConfigured) return false;
 
     if (!this.isOnline) {
       this.emitStatus('offline');
-      return;
+      return false;
     }
 
     const authUserId = await this.getAuthenticatedUserId();
-    if (!authUserId) return;
+    if (!authUserId) return false;
 
     // Se já houver sincronização em voo deste nó, enfileira a versão mais recente em pendingNodeSaves
     if (this.inFlightNodes.has(node.id)) {
@@ -191,17 +205,19 @@ class SyncEngineClass {
       if (!existingPending || new Date(node.updatedAt).getTime() >= new Date(existingPending.updatedAt).getTime()) {
         this.pendingNodeSaves.set(node.id, node);
       }
-      return;
+      return true;
     }
 
     // Evita enviar se não mudou desde o último envio
     const lastTime = this.lastSyncedNodeTime.get(node.id);
     if (lastTime && lastTime === node.updatedAt && !node.deletedAt) {
-      return;
+      return true;
     }
 
     this.inFlightNodes.add(node.id);
     console.log('[NODE SYNC START]', { nodeId: node.id, name: node.name, updatedAt: node.updatedAt });
+
+    let syncedSuccessfully = false;
 
     try {
       const canonicalId = toCanonicalUuid(node.id);
@@ -226,6 +242,7 @@ class SyncEngineClass {
           if (!error) {
             this.lastSyncedNodeTime.set(node.id, node.updatedAt);
             console.log('[NODE SYNC DONE]', { nodeId: node.id, name: node.name, updatedAt: node.updatedAt });
+            syncedSuccessfully = true;
             break;
           }
           console.warn(`[SyncEngine] Erro ao sincronizar node (${attempt}/${maxRetries}):`, error.message);
@@ -249,6 +266,45 @@ class SyncEngineClass {
         });
       }
     }
+
+    return syncedSuccessfully;
+  }
+
+  /**
+   * Enfileira persistência de um nó na fila local durável do IndexedDB (`sync_queue`).
+   * Desacoplada e fire-and-forget: NÃO bloqueia a interface.
+   */
+  async enqueueNode(node: TreeNode): Promise<void> {
+    const userId = node.userId;
+    const versionTimestamp = new Date(node.updatedAt || new Date().toISOString()).getTime();
+
+    const queueItem: SyncQueueItem = {
+      id: `sync_node_${node.id}`,
+      userId,
+      entityType: 'node',
+      entityId: node.id,
+      operation: node.deletedAt ? 'delete' : 'upsert',
+      payload: node,
+      version: versionTimestamp,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      attempts: 0,
+      nextAttemptAt: 0,
+      status: 'pending',
+    };
+
+    try {
+      await indexedDbService.enqueueSyncItem(queueItem);
+    } catch (err) {
+      console.warn('[SyncEngine] Falha ao persistir node na fila do IndexedDB:', err);
+    }
+
+    if (!this.isOnline) {
+      this.emitStatus('offline');
+      return;
+    }
+
+    this.triggerQueueProcessing(50);
   }
 
   /**
@@ -516,8 +572,7 @@ class SyncEngineClass {
             } else if (item.entityType === 'node') {
               const node = item.payload;
               if (node) {
-                await this.syncNode(node);
-                success = true;
+                success = await this.syncNode(node);
               } else {
                 success = true;
               }
