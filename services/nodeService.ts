@@ -182,6 +182,7 @@ export const nodeService = {
       }
     }
 
+    // 2. Atualizar no IndexedDB localmente
     node.parentId = newParentId;
     if (typeof newPosition === 'number') {
       node.position = newPosition;
@@ -189,9 +190,12 @@ export const nodeService = {
     node.updatedAt = new Date().toISOString();
     await indexedDbService.saveNode(node);
 
-    // Sincroniza com o Supabase
-    await syncEngine.syncNode(node);
+    // 3. Dispara sincronização remota em background sem bloquear a UI
+    syncEngine.syncNode(node).catch((err) => {
+      console.warn('[nodeService] Sincronização em background falhou para nó movido:', err);
+    });
 
+    // 4. Retorna resultado local imediatamente
     return true;
   },
 

@@ -278,7 +278,7 @@ export function TreeNodeItem({
                     className="w-full text-left px-3 py-1.5 hover:bg-[#E3DCD2] flex items-center gap-2 cursor-pointer text-[#3D352E]"
                   >
                     <Star className={`w-3.5 h-3.5 ${node.isFavorite ? 'fill-amber-500 text-amber-500' : 'text-[#8C7B6E]'}`} />
-                    <span>{node.isFavorite ? '⭐ Remover dos favoritos' : '⭐ Adicionar aos favoritos'}</span>
+                    <span>{node.isFavorite ? 'Remover dos favoritos' : 'Adicionar aos favoritos'}</span>
                   </button>
                   <button
                     onClick={() => {

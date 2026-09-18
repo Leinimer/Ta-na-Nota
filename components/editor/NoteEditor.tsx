@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import { StarterKit } from '@tiptap/starter-kit';
 import { Underline } from '@tiptap/extension-underline';
@@ -51,12 +51,8 @@ export function NoteEditor({
   const titleRef = useRef(node.name || 'Nova nota');
   const lastKnownVersionRef = useRef<number>(note.version || 1);
   const lastUpdatedAtRef = useRef<string>(note.updatedAt || '');
+  const lastLocallySavedMdRef = useRef<string>(note.markdownContent || '');
   const activeNoteIdRef = useRef<string>(note.id);
-
-  // Keep titleRef in sync with node.name if changed externally
-  useEffect(() => {
-    titleRef.current = node.name || 'Nova nota';
-  }, [node.name]);
 
   // Ensure markdownContent has # Title as the first element
   const getInitialMarkdown = () => {
@@ -297,6 +293,7 @@ export function NoteEditor({
       onUpdate: ({ editor: ed }) => {
         const json = ed.getJSON();
         const md = MarkdownService.visualToMarkdown(json);
+        lastLocallySavedMdRef.current = md;
         setMarkdownContent(md);
         setTags(MarkdownService.extractTags(md));
 
@@ -316,6 +313,28 @@ export function NoteEditor({
     [note.id]
   );
 
+  // Sincroniza alteração de nome vinda da sidebar diretamente no primeiro bloco documentTitle do Tiptap via transação atômica
+  useEffect(() => {
+    const newName = node.name || 'Nova nota';
+    if (newName !== titleRef.current) {
+      titleRef.current = newName;
+      if (editor && !editor.isDestroyed) {
+        const firstNode = editor.state.doc.firstChild;
+        if (firstNode && firstNode.type.name === 'documentTitle' && firstNode.textContent !== newName) {
+          const { tr } = editor.state;
+          const from = 1;
+          const to = firstNode.nodeSize - 1;
+          if (to >= from) {
+            tr.replaceWith(from, to, newName ? editor.schema.text(newName) : []);
+          } else if (newName) {
+            tr.insert(from, editor.schema.text(newName));
+          }
+          editor.view.dispatch(tr);
+        }
+      }
+    }
+  }, [node.name, editor]);
+
   // Sincronização de atualizações remotas via Realtime (sem disparar loop de salvamento)
   useEffect(() => {
     // Se o usuário alternou de nota ativa
@@ -323,6 +342,7 @@ export function NoteEditor({
       activeNoteIdRef.current = note.id;
       lastKnownVersionRef.current = note.version || 1;
       lastUpdatedAtRef.current = note.updatedAt || '';
+      lastLocallySavedMdRef.current = note.markdownContent || '';
       return;
     }
 
@@ -334,14 +354,26 @@ export function NoteEditor({
       return;
     }
 
-    // 2. Se a versão recebida for MENOR que a versão já aplicada/conhecida, ignora (remoto desatualizado)
-    if (incomingVersion < currentVersion) {
+    // 2. Se a versão recebida for MENOR ou igual à versão já aplicada/conhecida, ignora (remoto desatualizado ou eco)
+    if (incomingVersion <= currentVersion) {
       return;
     }
 
-    // 3. Versão remota é MAIOR: aceita e aplica
+    // 3. Se o conteúdo recebido for idêntico ao que o editor tem no momento ou ao que foi salvo localmente:
+    // Não reconstruir o documento Tiptap! Apenas atualizar referências de versão e timestamp
+    if (editor && !editor.isDestroyed) {
+      const currentEditorMd = MarkdownService.visualToMarkdown(editor.getJSON());
+      if (note.markdownContent === currentEditorMd || note.markdownContent === lastLocallySavedMdRef.current) {
+        lastKnownVersionRef.current = incomingVersion;
+        lastUpdatedAtRef.current = note.updatedAt || '';
+        return;
+      }
+    }
+
+    // 4. Versão remota genuína de outro cliente/sessão: aceita e aplica
     lastKnownVersionRef.current = incomingVersion;
     lastUpdatedAtRef.current = note.updatedAt || '';
+    lastLocallySavedMdRef.current = note.markdownContent || '';
 
     const newMd = note.markdownContent || '';
     setMarkdownContent(newMd);
@@ -353,7 +385,7 @@ export function NoteEditor({
       saveTimerRef.current = null;
     }
 
-    if (editor) {
+    if (editor && !editor.isDestroyed) {
       try {
         let json = note.editorContent;
         if (typeof json === 'string') {
@@ -366,8 +398,7 @@ export function NoteEditor({
         if (!json || typeof json !== 'object' || json.type !== 'doc' || !Array.isArray(json.content)) {
           json = MarkdownService.markdownToVisual(newMd, node.name || 'Nova nota');
         }
-        // Aplica a atualização no editor somente se o conteúdo diferir
-        // emitUpdate: false garante que o Tiptap NÃO dispara o onUpdate nem novo autosave!
+        // Aplica a atualização no editor somente se a alteração for genuinamente remota
         editor.commands.setContent(json, { emitUpdate: false });
       } catch (err) {
         console.warn('[NoteEditor] Erro ao sincronizar conteúdo remoto no editor:', err);
@@ -455,11 +486,14 @@ export function NoteEditor({
             className="w-full max-w-[850px] min-h-[650px] bg-[#FFFFFF] border border-[#E3DCD2] rounded-xl shadow-xs p-6 sm:p-12 relative flex flex-col"
           >
             <DocumentTitleContext.Provider
-              value={{
-                userId: node.userId,
-                noteId: note.id,
-                onTagClick: (tag) => onTagClick && onTagClick(tag),
-              }}
+              value={useMemo(
+                () => ({
+                  userId: node.userId,
+                  noteId: note.id,
+                  onTagClick: (tag: string) => onTagClick && onTagClick(tag),
+                }),
+                [node.userId, note.id, onTagClick]
+              )}
             >
               <div className="flex-1">
                 <EditorContent editor={editor} />

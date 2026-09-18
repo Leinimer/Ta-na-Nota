@@ -41,6 +41,61 @@ function updateNodeNameInTree(nodes: TreeNode[], targetId: string, newName: stri
   });
 }
 
+// Helper para mover nó na árvore mantendo imutabilidade, preservando filhos e profundidade arbitrária
+function moveNodeInTree(nodes: TreeNode[], targetId: string, newParentId: string | null): TreeNode[] {
+  let extractedNode: TreeNode | null = null;
+
+  // 1. Remove recursivamente o nó da sua localização atual preservando seus filhos
+  function removeRecursive(list: TreeNode[]): TreeNode[] {
+    const nextList: TreeNode[] = [];
+    for (const item of list) {
+      if (item.id === targetId) {
+        extractedNode = { ...item, parentId: newParentId };
+      } else {
+        if (item.children && item.children.length > 0) {
+          const newChildren = removeRecursive(item.children);
+          nextList.push({ ...item, children: newChildren });
+        } else {
+          nextList.push(item);
+        }
+      }
+    }
+    return nextList;
+  }
+
+  const listWithoutNode = removeRecursive(nodes);
+
+  if (!extractedNode) {
+    return nodes; // Se não encontrou, retorna lista sem modificações
+  }
+
+  // 2. Se for para a raiz (newParentId === null), adiciona na lista raiz
+  if (!newParentId) {
+    return [...listWithoutNode, extractedNode];
+  }
+
+  // 3. Insere recursivamente dentro da pasta de destino
+  function insertRecursive(list: TreeNode[]): TreeNode[] {
+    return list.map((item) => {
+      if (item.id === newParentId) {
+        return {
+          ...item,
+          children: [...(item.children || []), extractedNode!],
+        };
+      }
+      if (item.children && item.children.length > 0) {
+        return {
+          ...item,
+          children: insertRecursive(item.children),
+        };
+      }
+      return item;
+    });
+  }
+
+  return insertRecursive(listWithoutNode);
+}
+
 export function AppShell() {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
   const [tree, setTree] = useState<TreeNode[]>([]);
@@ -269,12 +324,20 @@ export function AppShell() {
   // 6. Rename Node (via Sidebar inline edit ou menu)
   const handleRenameNode = async (nodeId: string, newName: string) => {
     if (!currentUser) return;
+    const finalName = newName.trim() || 'Nova nota';
+
+    // 1. Atualização otimista imediata na árvore da Sidebar (0ms)
+    setTree((prevTree) => updateNodeNameInTree(prevTree, nodeId, finalName));
+
+    // 2. Atualiza nó ativo se for o mesmo (passado ao NoteEditor)
+    if (activeNodeRef.current && activeNodeRef.current.id === nodeId) {
+      activeNodeRef.current.name = finalName;
+      setActiveNode((prev) => (prev && prev.id === nodeId ? { ...prev, name: finalName } : prev));
+    }
+
+    // 3. Persistência no IndexedDB e sincronização em background
     try {
-      await nodeService.renameNode(nodeId, newName);
-      if (activeNode && activeNode.id === nodeId) {
-        setActiveNode((prev) => (prev ? { ...prev, name: newName } : null));
-      }
-      await refreshAppData(currentUser.id);
+      await nodeService.renameNode(nodeId, finalName);
     } catch (err) {
       console.warn('Error renaming node:', err);
     }
@@ -338,19 +401,37 @@ export function AppShell() {
     }
   };
 
-  // 9. Move Node
+  // 9. Move Node - Local-first com atualização otimista imediata na UI
   const handleMoveNode = async (draggedId: string, targetParentId: string | null) => {
-    if (!currentUser) return;
+    if (!currentUser || draggedId === targetParentId) return;
+
+    // Guarda estado anterior para possível rollback
+    const previousTree = tree;
+
+    // Se o destino for uma pasta, expande ela imediatamente na UI para ver o item inserido
+    if (targetParentId) {
+      setExpandedFolders((prev) => new Set(prev).add(targetParentId));
+    }
+
+    // 1. Atualização otimista imediata da árvore na Sidebar (0ms de latência)
+    const optimisticTree = moveNodeInTree(tree, draggedId, targetParentId);
+    setTree(optimisticTree);
+
+    // Se o nó movido for o nó ativo, atualiza seu parentId
+    if (activeNodeRef.current && activeNodeRef.current.id === draggedId) {
+      setActiveNode((prev) => (prev ? { ...prev, parentId: targetParentId } : null));
+    }
+
+    // 2. Persiste no IndexedDB e sincroniza em background (não bloqueia a UI)
     try {
       const success = await nodeService.moveNode(draggedId, targetParentId);
-      if (success) {
-        if (targetParentId) {
-          setExpandedFolders((prev) => new Set(prev).add(targetParentId));
-        }
-        await refreshAppData(currentUser.id);
+      if (!success) {
+        // Rollback se a operação for inválida (ex: ciclo)
+        setTree(previousTree);
       }
     } catch (err) {
       console.warn('Error moving node:', err);
+      setTree(previousTree);
     }
   };
 
@@ -372,8 +453,12 @@ export function AppShell() {
   const handleSaveContent = async (nodeId: string, md: string, json: any) => {
     try {
       const savedNote = await noteService.saveNote(nodeId, md, json);
+      // REGRA DE OURO: NÃO fazer setActiveNote(savedNote) após save LOCAL originado pelo editor!
+      // O editor já possui o conteúdo atualizado localmente.
+      // Atualizamos apenas o activeNoteRef em memória para manter metadados sincronizados sem re-renderizar o NoteEditor
       if (savedNote && activeNoteRef.current && (activeNoteRef.current.nodeId === nodeId || activeNoteRef.current.id === savedNote.id)) {
-        setActiveNote(savedNote);
+        activeNoteRef.current.version = savedNote.version;
+        activeNoteRef.current.updatedAt = savedNote.updatedAt;
       }
       // refresh tags count in sidebar
       if (currentUser) {

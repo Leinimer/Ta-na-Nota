@@ -119,39 +119,15 @@ export function Sidebar({
       id="app-sidebar"
       className="w-full h-full flex flex-col bg-[#F9F7F2] border-r border-[#E3DCD2] text-[#3D352E] select-none"
     >
-      {/* 1. Topo da Sidebar: Logo 'Tá na nota' em fonte cursiva + status discreto de sincronização */}
+      {/* 1. Topo da Sidebar: SOMENTE [logo] Tá na nota */}
       <div className="p-3.5 border-b border-[#E3DCD2]">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-lg bg-[#8C7B6E] text-[#F9F7F2] flex items-center justify-center font-handwritten text-xl font-bold shadow-xs">
             T
           </div>
-          <div className="flex flex-col">
-            <h1 className="font-handwritten text-2xl font-bold tracking-normal leading-none text-[#8C7B6E]">
-              Tá na nota
-            </h1>
-            <div className="flex items-center gap-1.5 mt-1">
-              {syncStatus === 'saving' && (
-                <span className="flex items-center gap-1 text-[11px] text-amber-700 font-medium">
-                  <RefreshCw className="w-2.5 h-2.5 animate-spin" /> Sincronizando...
-                </span>
-              )}
-              {syncStatus === 'saved' && (
-                <span className="flex items-center gap-1 text-[11px] text-emerald-700 font-medium">
-                  <CheckCircle2 className="w-2.5 h-2.5" /> Sincronizado
-                </span>
-              )}
-              {syncStatus === 'offline' && (
-                <span className="flex items-center gap-1 text-[11px] text-[#8C7B6E]/80">
-                  <WifiOff className="w-2.5 h-2.5" /> Offline — salvo neste dispositivo
-                </span>
-              )}
-              {syncStatus === 'error' && (
-                <span className="flex items-center gap-1 text-[11px] text-rose-700 font-medium">
-                  <AlertCircle className="w-2.5 h-2.5" /> Erro de sincronização
-                </span>
-              )}
-            </div>
-          </div>
+          <h1 className="font-handwritten text-2xl font-bold tracking-normal leading-none text-[#8C7B6E]">
+            Tá na nota
+          </h1>
         </div>
       </div>
 
@@ -433,19 +409,40 @@ export function Sidebar({
         )}
       </div>
 
-      {/* 6. Footer: Ajustes (Configurações, Conta, Sincronização e Exportar tudo) */}
-      <div className="p-3 border-t border-[#E3DCD2] flex items-center justify-between text-xs text-[#8C7B6E]">
+      {/* 6. Footer: Status de sincronização à esquerda e engrenagem de Ajustes à direita */}
+      <div className="p-3 border-t border-[#E3DCD2] flex items-center justify-between text-xs text-[#8C7B6E] select-none">
+        <div className="flex items-center gap-1.5 truncate">
+          {syncStatus === 'saving' && (
+            <span className="flex items-center gap-1.5 text-[11px] text-amber-700 font-medium">
+              <RefreshCw className="w-3 h-3 animate-spin" /> Sincronizando...
+            </span>
+          )}
+          {syncStatus === 'saved' && (
+            <span className="flex items-center gap-1.5 text-[11px] text-emerald-700 font-medium">
+              <CheckCircle2 className="w-3.5 h-3.5" /> Sincronizado
+            </span>
+          )}
+          {syncStatus === 'offline' && (
+            <span className="flex items-center gap-1.5 text-[11px] text-[#8C7B6E]">
+              <WifiOff className="w-3.5 h-3.5" /> Offline
+            </span>
+          )}
+          {syncStatus === 'error' && (
+            <span className="flex items-center gap-1.5 text-[11px] text-rose-700 font-medium">
+              <AlertCircle className="w-3.5 h-3.5" /> Erro de sincronização
+            </span>
+          )}
+        </div>
+
         <button
           id="btn-sidebar-settings"
           onClick={handleOpenSettingsPanel}
-          title="Ajustes e Configurações"
-          aria-label="Configurações"
-          className="flex items-center gap-2 py-1.5 px-2.5 rounded-lg hover:bg-[#E3DCD2] hover:text-[#3D352E] font-medium text-xs transition-colors cursor-pointer"
+          title="Ajustes"
+          aria-label="Ajustes"
+          className="p-1.5 text-[#8C7B6E] hover:text-[#3D352E] hover:bg-[#E3DCD2] rounded-md transition-colors cursor-pointer"
         >
-          <Settings className="w-4 h-4 text-[#8C7B6E]" />
-          <span>Ajustes</span>
+          <Settings className="w-4 h-4" />
         </button>
-        <span className="text-[10px] font-mono text-[#8C7B6E]/60">v1.0</span>
       </div>
     </aside>
   );
