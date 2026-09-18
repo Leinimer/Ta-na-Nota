@@ -28,6 +28,19 @@ import {
   FileText,
 } from 'lucide-react';
 
+// Helper para atualizar nome de nó na árvore sem recarregar tudo do IndexedDB durante digitação
+function updateNodeNameInTree(nodes: TreeNode[], targetId: string, newName: string): TreeNode[] {
+  return nodes.map((node) => {
+    if (node.id === targetId) {
+      return { ...node, name: newName };
+    }
+    if (node.children && node.children.length > 0) {
+      return { ...node, children: updateNodeNameInTree(node.children, targetId, newName) };
+    }
+    return node;
+  });
+}
+
 export function AppShell() {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
   const [tree, setTree] = useState<TreeNode[]>([]);
@@ -253,7 +266,7 @@ export function AppShell() {
     }
   };
 
-  // 6. Rename Node
+  // 6. Rename Node (via Sidebar inline edit ou menu)
   const handleRenameNode = async (nodeId: string, newName: string) => {
     if (!currentUser) return;
     try {
@@ -265,6 +278,35 @@ export function AppShell() {
     } catch (err) {
       console.warn('Error renaming node:', err);
     }
+  };
+
+  // Timer ref para debounce de persistência na digitação do título da nota
+  const renameDebounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // 6b. Live Title Update (digitação no título da nota com resposta visual instantânea e 0 recriações de nó)
+  const handleUpdateTitleLive = (nodeId: string, newTitle: string) => {
+    const displayName = newTitle || 'Nova nota';
+
+    // 1. Atualização imediata em memória na árvore (Sidebar atualiza em 0ms)
+    setTree((prevTree) => updateNodeNameInTree(prevTree, nodeId, displayName));
+
+    // Atualiza activeNode sem recriar se o id for idêntico
+    if (activeNodeRef.current && activeNodeRef.current.id === nodeId) {
+      activeNodeRef.current.name = displayName;
+      setActiveNode((prev) => (prev && prev.id === nodeId ? { ...prev, name: displayName } : prev));
+    }
+
+    // 2. Debounce na gravação no IndexedDB e na sync_queue para evitar sobrecarga de I/O
+    if (renameDebounceTimerRef.current) {
+      clearTimeout(renameDebounceTimerRef.current);
+    }
+    renameDebounceTimerRef.current = setTimeout(async () => {
+      try {
+        await nodeService.renameNode(nodeId, displayName);
+      } catch (err) {
+        console.warn('Error saving renamed note from editor:', err);
+      }
+    }, 350);
   };
 
   // 7. Delete Node
@@ -469,6 +511,7 @@ export function AppShell() {
           currentUser={currentUser}
           syncStatus={syncStatus}
           onOpenAuth={() => setIsAuthModalOpen(true)}
+          onOpenSettings={() => setIsAuthModalOpen(true)}
           onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
           onToggleExpand={toggleFolderExpand}
           onSelectNode={selectNode}
@@ -509,6 +552,7 @@ export function AppShell() {
           currentUser={currentUser}
           syncStatus={syncStatus}
           onOpenAuth={() => setIsAuthModalOpen(true)}
+          onOpenSettings={() => setIsAuthModalOpen(true)}
           onOpenCommandPalette={() => {
             setIsMobileDrawerOpen(false);
             setIsCommandPaletteOpen(true);
@@ -530,9 +574,9 @@ export function AppShell() {
       </div>
 
       {/* Main Content Area */}
-      <main id="main-content-canvas" className="flex-1 flex flex-col h-full overflow-hidden relative">
-        {/* Mobile Header Toggle */}
-        <div className="md:hidden flex items-center justify-between px-4 py-2.5 bg-[#F9F7F2] border-b border-[#E3DCD2]">
+      <main id="main-content-canvas" className="flex-1 flex flex-col h-full w-full max-w-[100vw] overflow-hidden relative">
+        {/* Mobile Header Toggle: [☰] Tá na nota [🔍] */}
+        <div className="md:hidden flex items-center justify-between px-4 py-2.5 bg-[#F9F7F2] border-b border-[#E3DCD2] shrink-0 select-none">
           <button
             onClick={() => setIsMobileDrawerOpen(true)}
             className="p-1.5 text-[#8C7B6E] hover:text-[#3D352E] rounded-md hover:bg-[#E3DCD2] cursor-pointer"
@@ -540,7 +584,9 @@ export function AppShell() {
           >
             <Menu className="w-5 h-5" />
           </button>
-          <span className="font-serif font-semibold text-sm text-[#8C7B6E]">Tá na nota</span>
+          <span className="font-handwritten font-bold text-2xl text-[#8C7B6E] tracking-normal">
+            Tá na nota
+          </span>
           <button
             onClick={() => setIsCommandPaletteOpen(true)}
             className="p-1.5 text-[#8C7B6E] hover:text-[#3D352E] rounded-md hover:bg-[#E3DCD2] cursor-pointer"
@@ -557,7 +603,7 @@ export function AppShell() {
               node={activeNode}
               note={activeNote}
               syncStatus={syncStatus}
-              onUpdateTitle={handleRenameNode}
+              onUpdateTitle={handleUpdateTitleLive}
               onSaveContent={handleSaveContent}
               onToggleFavorite={handleToggleFavorite}
               onDeleteNote={handleDeleteNode}
@@ -610,11 +656,13 @@ export function AppShell() {
         onExportAll={handleExportAll}
       />
 
-      {/* Auth & Sync Modal */}
+      {/* Auth & Settings Modal */}
       <AuthModal
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
         currentUser={currentUser}
+        syncStatus={syncStatus}
+        onExportAll={handleExportAll}
         onUserChanged={async (user) => {
           setCurrentUser(user);
           if (user) {

@@ -24,6 +24,24 @@
     --selection-bg: #D9C5B2;
     --selection-text: #3D352E;
   }
+
+  html, body {
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  *, *::before, *::after {
+    box-sizing: border-box;
+  }
+}
+
+/* Fonte cursiva/handwritten exclusiva para o logo "Tá na nota" */
+.font-handwritten {
+  font-family: var(--font-caveat), 'Caveat', cursive, 'Brush Script MT', sans-serif;
 }
 
 /* Subtle Notebook Paper Texture */
@@ -399,3 +417,27 @@
   height: 0;
   pointer-events: none;
 }
+
+/* Document Title - Estabilidade Absoluta no Mobile & Desktop */
+.document-title-wrapper,
+.document-title-wrapper *,
+.document-title {
+  user-select: text !important;
+  -webkit-user-select: text !important;
+  -webkit-touch-callout: default !important;
+}
+
+.document-title-wrapper [contenteditable="true"] {
+  outline: none;
+  min-height: 2.5rem;
+  cursor: text;
+}
+
+/* Placeholder para título vazio */
+.document-title-wrapper [contenteditable="true"]:empty::before {
+  content: 'Sem título';
+  color: #B5A89E;
+  pointer-events: none;
+  display: block;
+}
+

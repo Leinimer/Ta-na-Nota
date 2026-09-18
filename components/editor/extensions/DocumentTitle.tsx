@@ -14,17 +14,17 @@ export const DocumentTitleContext = React.createContext<{
   noteId: '',
 });
 
-function DocumentTitleView({}: NodeViewProps) {
+const DocumentTitleView = React.memo(function DocumentTitleView({}: NodeViewProps) {
   const { userId, noteId, onTagClick } = React.useContext(DocumentTitleContext);
 
   return (
-    <NodeViewWrapper className="document-title-wrapper flex flex-col items-center w-full mb-4 select-none">
+    <NodeViewWrapper className="document-title-wrapper flex flex-col items-center w-full mb-3 select-text">
       <NodeViewContent
         as="div"
-        className="w-full text-center text-3xl sm:text-4xl font-serif font-bold text-[#8C7B6E] outline-none tracking-tight py-1 px-2 border-b border-transparent hover:border-[#E3DCD2] focus:border-[#8C7B6E] transition-colors"
+        className="w-full text-center text-3xl sm:text-4xl font-serif font-bold text-[#8C7B6E] outline-none tracking-tight py-1 px-2 border-b border-transparent hover:border-[#E3DCD2] focus:border-[#8C7B6E] transition-colors select-text cursor-text"
       />
       {noteId && userId && (
-        <div className="mt-2.5 flex justify-center w-full" contentEditable={false}>
+        <div className="mt-2 flex justify-center w-full select-none" contentEditable={false}>
           <NoteTagsBar
             userId={userId}
             noteId={noteId}
@@ -34,7 +34,7 @@ function DocumentTitleView({}: NodeViewProps) {
       )}
     </NodeViewWrapper>
   );
-}
+});
 
 export const DocumentTitle = Node.create({
   name: 'documentTitle',
@@ -66,9 +66,9 @@ export const DocumentTitle = Node.create({
         return false;
       },
       Backspace: ({ editor }) => {
-        const { $from } = editor.state.selection;
-        if ($from.parent.type.name === 'documentTitle' && $from.parentOffset === 0) {
-          // Do not delete the title block
+        const { $from, empty } = editor.state.selection;
+        if ($from.parent.type.name === 'documentTitle' && $from.parentOffset === 0 && empty) {
+          // Mantém o cursor no título e nunca destrói o nó
           return true;
         }
         return false;

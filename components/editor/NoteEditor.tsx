@@ -22,25 +22,6 @@ import { linkService } from '@/services/linkService';
 import { attachmentService } from '@/services/attachmentService';
 import { DocumentTitle, DocumentTitleContext } from './extensions/DocumentTitle';
 import { ResizableImage } from './extensions/ResizableImage';
-import {
-  Star,
-  Code2,
-  Eye,
-  RefreshCw,
-  CheckCircle2,
-  AlertCircle,
-} from 'lucide-react';
-
-function formatLastModifiedTime(isoDate?: string) {
-  if (!isoDate) return '';
-  try {
-    const d = new Date(isoDate);
-    if (isNaN(d.getTime())) return '';
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  } catch {
-    return '';
-  }
-}
 
 interface NoteEditorProps {
   node: TreeNode;
@@ -322,7 +303,7 @@ export function NoteEditor({
         // Sync title with documentTitle node (first node)
         const firstNode = ed.state.doc.firstChild;
         if (firstNode && firstNode.type.name === 'documentTitle') {
-          const currentText = firstNode.textContent.trim() || 'Nova nota';
+          const currentText = firstNode.textContent;
           if (currentText !== titleRef.current) {
             titleRef.current = currentText;
             onUpdateTitle(node.id, currentText);
@@ -385,14 +366,15 @@ export function NoteEditor({
         if (!json || typeof json !== 'object' || json.type !== 'doc' || !Array.isArray(json.content)) {
           json = MarkdownService.markdownToVisual(newMd, node.name || 'Nova nota');
         }
-        // Aplica a atualização no editor (mesmo que focado, pois a versão remota é comprovadamente mais nova)
+        // Aplica a atualização no editor somente se o conteúdo diferir
         // emitUpdate: false garante que o Tiptap NÃO dispara o onUpdate nem novo autosave!
         editor.commands.setContent(json, { emitUpdate: false });
       } catch (err) {
         console.warn('[NoteEditor] Erro ao sincronizar conteúdo remoto no editor:', err);
       }
     }
-  }, [note.id, note.version, note.updatedAt, editor, node.name, note.markdownContent, note.editorContent]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [note.id, note.version, note.updatedAt, editor, note.markdownContent, note.editorContent]);
 
   // Toggle between Visual and Raw Markdown mode
   const handleToggleMode = (newMode: 'visual' | 'markdown') => {
@@ -456,139 +438,44 @@ export function NoteEditor({
 
   return (
     <div id="note-editor-container" className="flex flex-col flex-1 h-full bg-[#F9F7F2] overflow-hidden">
-      {/* 1. Barra Superior
-          LADO ESQUERDO: [ Favorito ] [ Visual ] [ Markdown ]
-          LADO DIREITO: Status de sincronização (Salvando... | Sincronizado | Offline | Erro)
-      */}
-      <div
-        id="note-top-bar"
-        className="flex items-center justify-between gap-3 px-4 sm:px-6 py-2 border-b border-[#E3DCD2] bg-[#F9F7F2] text-xs select-none"
-      >
-        {/* LADO ESQUERDO: Favorito | Visual | Markdown */}
-        <div className="flex items-center gap-2 shrink-0">
-          {/* Botão de Favorito */}
-          <button
-            type="button"
-            id="btn-note-favorite"
-            title={node.isFavorite ? 'Remover dos favoritos' : 'Favoritar nota'}
-            onClick={() => onToggleFavorite(node.id)}
-            className="p-1.5 text-[#8C7B6E] hover:text-[#3D352E] rounded-md hover:bg-[#E3DCD2] transition-colors cursor-pointer"
-            aria-label="Favoritar nota"
-          >
-            <Star className={`w-3.5 h-3.5 ${node.isFavorite ? 'fill-amber-500 text-amber-500' : ''}`} />
-          </button>
+      {/* 1. Barra de Ferramentas diretamente acima da nota */}
+      <EditorToolbar
+        editor={editor}
+        onUploadImage={handleUploadImage}
+        highlightModeColor={highlightModeColor}
+        onSetHighlightModeColor={setHighlightModeColor}
+      />
 
-          {/* Alternância Visual e Markdown */}
-          <div className="flex items-center p-0.5 rounded-md bg-[#E3DCD2] border border-[#D9C5B2]/60">
-            <button
-              type="button"
-              id="btn-mode-visual"
-              title="Modo Visual"
-              onClick={() => handleToggleMode('visual')}
-              className={`p-1 rounded transition-all cursor-pointer ${
-                mode === 'visual'
-                  ? 'bg-[#D9C5B2] text-[#3D352E] shadow-2xs font-semibold'
-                  : 'text-[#8C7B6E]/70 hover:text-[#8C7B6E]'
-              }`}
-              aria-label="Visual"
-            >
-              <Eye className="w-3.5 h-3.5" />
-            </button>
-            <button
-              type="button"
-              id="btn-mode-markdown"
-              title="Modo Markdown"
-              onClick={() => handleToggleMode('markdown')}
-              className={`p-1 rounded transition-all cursor-pointer ${
-                mode === 'markdown'
-                  ? 'bg-[#D9C5B2] text-[#3D352E] shadow-2xs font-semibold'
-                  : 'text-[#8C7B6E]/70 hover:text-[#8C7B6E]'
-              }`}
-              aria-label="Markdown"
-            >
-              <Code2 className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        </div>
-
-        {/* LADO DIREITO: Status de Sincronização & Horário */}
-        <div className="flex items-center gap-2 text-xs text-[#8C7B6E] truncate">
-          {syncStatus === 'saving' && (
-            <span className="flex items-center gap-1.5 text-[11px] text-amber-700 font-medium">
-              <RefreshCw className="w-3 h-3 animate-spin" /> Salvando...
-            </span>
-          )}
-          {syncStatus === 'saved' && (
-            <span className="flex items-center gap-1.5 text-[11px] text-emerald-700 font-medium">
-              <CheckCircle2 className="w-3.5 h-3.5" /> Sincronizado
-            </span>
-          )}
-          {syncStatus === 'offline' && (
-            <span className="flex items-center gap-1.5 text-[11px] text-[#8C7B6E] font-medium">
-              ● Offline — salvo neste dispositivo
-            </span>
-          )}
-          {syncStatus === 'error' && (
-            <span className="flex items-center gap-1.5 text-[11px] text-rose-700 font-medium">
-              <AlertCircle className="w-3.5 h-3.5" /> Erro de sincronização
-            </span>
-          )}
-
-          {node.updatedAt && (
-            <span className="text-[11px] text-[#8C7B6E]/70 hidden sm:inline">
-              • {formatLastModifiedTime(node.updatedAt)}
-            </span>
-          )}
-        </div>
-      </div>
-
-      {/* 2. Visual Mode Docked Toolbar */}
-      {mode === 'visual' && (
-        <EditorToolbar
-          editor={editor}
-          onUploadImage={handleUploadImage}
-          highlightModeColor={highlightModeColor}
-          onSetHighlightModeColor={setHighlightModeColor}
-        />
-      )}
-
-      {/* 3. Editor Workspace Body */}
+      {/* 2. Editor Workspace Body (Nota com Título e Conteúdo) */}
       <div className="flex-1 overflow-y-auto custom-scrollbar">
-        {mode === 'visual' ? (
-          <div className="p-4 sm:p-8 flex justify-center">
-            {/* Paper Sheet Container (Página da Nota) */}
-            <div
-              id="tiptap-editor-wrapper"
-              className="w-full max-w-[850px] min-h-[650px] bg-[#FFFFFF] border border-[#E3DCD2] rounded-xl shadow-xs p-6 sm:p-12 relative flex flex-col"
+        <div className="p-4 sm:p-8 flex justify-center">
+          {/* Paper Sheet Container (Página da Nota) */}
+          <div
+            id="tiptap-editor-wrapper"
+            className="w-full max-w-[850px] min-h-[650px] bg-[#FFFFFF] border border-[#E3DCD2] rounded-xl shadow-xs p-6 sm:p-12 relative flex flex-col"
+          >
+            <DocumentTitleContext.Provider
+              value={{
+                userId: node.userId,
+                noteId: note.id,
+                onTagClick: (tag) => onTagClick && onTagClick(tag),
+              }}
             >
-              <DocumentTitleContext.Provider
-                value={{
-                  userId: node.userId,
-                  noteId: note.id,
-                  onTagClick: (tag) => onTagClick && onTagClick(tag),
-                }}
-              >
-                <div className="flex-1">
-                  <EditorContent editor={editor} />
-                </div>
-              </DocumentTitleContext.Provider>
+              <div className="flex-1">
+                <EditorContent editor={editor} />
+              </div>
+            </DocumentTitleContext.Provider>
 
-              {/* Slash Command Palette Popup */}
-              <SlashCommandMenu
-                editor={editor}
-                isOpen={slashMenuOpen}
-                onClose={() => setSlashMenuOpen(false)}
-                position={slashMenuPosition}
-                onTriggerImageUpload={() => noteImageInputRef.current?.click()}
-              />
-            </div>
+            {/* Slash Command Palette Popup */}
+            <SlashCommandMenu
+              editor={editor}
+              isOpen={slashMenuOpen}
+              onClose={() => setSlashMenuOpen(false)}
+              position={slashMenuPosition}
+              onTriggerImageUpload={() => noteImageInputRef.current?.click()}
+            />
           </div>
-        ) : (
-          <MarkdownEditor
-            content={markdownContent}
-            onChange={handleMarkdownChange}
-          />
-        )}
+        </div>
       </div>
 
       {/* Hidden input para seleção e upload de imagem via explorador do SO */}

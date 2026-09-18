@@ -211,8 +211,8 @@ export function TreeNodeItem({
           <Star className="w-3 h-3 fill-amber-500 text-amber-500 shrink-0" />
         )}
 
-        {/* Hover Action Menu Trigger */}
-        <div className="opacity-0 group-hover/item:opacity-100 transition-opacity flex items-center gap-0.5">
+        {/* Action Menu Trigger: sempre visível no mobile, hover/focus no desktop */}
+        <div className="opacity-100 sm:opacity-0 group-hover/item:opacity-100 group-focus-within/item:opacity-100 transition-opacity flex items-center gap-0.5">
           {isFolder && (
             <button
               title="Nova Nota Nesta Pasta"
@@ -228,13 +228,14 @@ export function TreeNodeItem({
 
           <button
             title="Mais Opções"
+            aria-label="Mais ações"
             onClick={(e) => {
               e.stopPropagation();
               setShowMenu(!showMenu);
             }}
-            className="p-1 text-[#8C7B6E] hover:text-[#3D352E] hover:bg-[#D9C5B2]/50 rounded cursor-pointer"
+            className="p-1.5 text-[#8C7B6E] hover:text-[#3D352E] hover:bg-[#D9C5B2]/50 rounded cursor-pointer min-w-[28px] min-h-[28px] flex items-center justify-center"
           >
-            <MoreVertical className="w-3 h-3" />
+            <MoreVertical className="w-3.5 h-3.5" />
           </button>
         </div>
 
@@ -243,7 +244,7 @@ export function TreeNodeItem({
           <>
             <div className="fixed inset-0 z-30" onClick={() => setShowMenu(false)} />
             <div
-              className="absolute right-2 top-full mt-1 z-40 w-44 bg-[#FEFDFA] border border-[#E3DCD2] rounded-lg shadow-lg py-1 text-xs text-[#3D352E] animate-in fade-in zoom-in-95 duration-100"
+              className="absolute right-2 top-full mt-1 z-40 w-48 bg-[#FEFDFA] border border-[#E3DCD2] rounded-lg shadow-lg py-1 text-xs text-[#3D352E] animate-in fade-in zoom-in-95 duration-100"
               onClick={(e) => e.stopPropagation()}
             >
               {isFolder ? (
@@ -277,7 +278,7 @@ export function TreeNodeItem({
                     className="w-full text-left px-3 py-1.5 hover:bg-[#E3DCD2] flex items-center gap-2 cursor-pointer text-[#3D352E]"
                   >
                     <Star className={`w-3.5 h-3.5 ${node.isFavorite ? 'fill-amber-500 text-amber-500' : 'text-[#8C7B6E]'}`} />
-                    {node.isFavorite ? 'Remover dos Favoritos' : 'Adicionar aos Favoritos'}
+                    <span>{node.isFavorite ? '⭐ Remover dos favoritos' : '⭐ Adicionar aos favoritos'}</span>
                   </button>
                   <button
                     onClick={() => {
