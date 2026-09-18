@@ -160,6 +160,12 @@ export const noteService = {
       node.updatedAt = now;
       await indexedDbService.saveNode(node);
 
+      console.log('[NODE LOCAL UPDATE]', {
+        nodeId: node.id,
+        title: node.name,
+        updatedAt: node.updatedAt,
+      });
+
       console.log('[NODE TITLE PERSISTED]', {
         nodeId: node.id,
         title: node.name,

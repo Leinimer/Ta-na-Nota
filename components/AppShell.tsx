@@ -28,17 +28,117 @@ import {
   FileText,
 } from 'lucide-react';
 
-// Helper para atualizar nome de nó na árvore sem recarregar tudo do IndexedDB durante digitação
-function updateNodeNameInTree(nodes: TreeNode[], targetId: string, newName: string): TreeNode[] {
+// Helper para atualizar propriedades de um nó na árvore
+function updateNodeInTree(nodes: TreeNode[], updatedNode: Partial<TreeNode> & { id: string }): TreeNode[] {
   return nodes.map((node) => {
-    if (node.id === targetId) {
-      return { ...node, name: newName };
+    if (node.id === updatedNode.id) {
+      return { ...node, ...updatedNode };
     }
     if (node.children && node.children.length > 0) {
-      return { ...node, children: updateNodeNameInTree(node.children, targetId, newName) };
+      return { ...node, children: updateNodeInTree(node.children, updatedNode) };
     }
     return node;
   });
+}
+
+// Helper para remover nó da árvore recursivamente
+function removeNodeFromTree(nodes: TreeNode[], targetId: string): TreeNode[] {
+  const nextList: TreeNode[] = [];
+  for (const node of nodes) {
+    if (node.id === targetId) {
+      continue;
+    }
+    if (node.children && node.children.length > 0) {
+      nextList.push({ ...node, children: removeNodeFromTree(node.children, targetId) });
+    } else {
+      nextList.push(node);
+    }
+  }
+  return nextList;
+}
+
+// Helper para buscar nó na árvore
+function findNodeInTree(list: TreeNode[], targetId: string): TreeNode | null {
+  for (const item of list) {
+    if (item.id === targetId) return item;
+    if (item.children && item.children.length > 0) {
+      const found = findNodeInTree(item.children, targetId);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+// Helper para inserir novo nó na árvore
+function insertNodeIntoTree(nodes: TreeNode[], newNode: TreeNode): TreeNode[] {
+  const exists = findNodeInTree(nodes, newNode.id);
+  if (exists) {
+    return updateNodeInTree(nodes, newNode);
+  }
+
+  const nodeWithChildren: TreeNode = {
+    ...newNode,
+    children: newNode.children || [],
+  };
+
+  if (!newNode.parentId) {
+    return [...nodes, nodeWithChildren].sort((a, b) => a.position - b.position);
+  }
+
+  function insertRecursive(list: TreeNode[]): TreeNode[] {
+    return list.map((item) => {
+      if (item.id === newNode.parentId) {
+        const children = [...(item.children || []), nodeWithChildren].sort((a, b) => a.position - b.position);
+        return { ...item, children };
+      }
+      if (item.children && item.children.length > 0) {
+        return { ...item, children: insertRecursive(item.children) };
+      }
+      return item;
+    });
+  }
+
+  return insertRecursive(nodes);
+}
+
+// Helper para atualizar nome de nó na árvore sem recarregar tudo do IndexedDB durante digitação
+function updateNodeNameInTree(nodes: TreeNode[], targetId: string, newName: string): TreeNode[] {
+  return updateNodeInTree(nodes, { id: targetId, name: newName });
+}
+
+// Helper incremental para processar evento Realtime de nó sem chamar getTree()
+function applyNodeChangeToTree(
+  tree: TreeNode[],
+  event: { eventType: string; node?: TreeNode; nodeId: string }
+): TreeNode[] {
+  if (event.eventType === 'DELETE') {
+    return removeNodeFromTree(tree, event.nodeId);
+  }
+
+  if (!event.node) {
+    return tree;
+  }
+
+  const node = event.node;
+  if (node.deletedAt) {
+    return removeNodeFromTree(tree, node.id);
+  }
+
+  // Verifica se o nó já existe na árvore
+  const existingNode = findNodeInTree(tree, node.id);
+
+  if (!existingNode) {
+    return insertNodeIntoTree(tree, node);
+  }
+
+  // Se mudou de parentId, move
+  if (existingNode.parentId !== node.parentId) {
+    const moved = moveNodeInTree(tree, node.id, node.parentId);
+    return updateNodeInTree(moved, node);
+  }
+
+  // Apenas atualização de propriedades (nome, posição, etc.)
+  return updateNodeInTree(tree, node);
 }
 
 // Helper para mover nó na árvore mantendo imutabilidade, preservando filhos e profundidade arbitrária
@@ -255,8 +355,9 @@ export function AppShell() {
             name: event.node?.name,
             eventType: event.eventType,
           });
-          const updatedTree = await nodeService.getTree(userId);
-          setTree(updatedTree);
+
+          // Atualização cirúrgica e incremental da árvore sem recarregar tudo com getTree()
+          setTree((prevTree) => applyNodeChangeToTree(prevTree, event));
 
           if (event.eventType === 'DELETE' && currentActiveNode && currentActiveNode.id === event.nodeId) {
             setActiveNode(null);
@@ -337,7 +438,7 @@ export function AppShell() {
       if (parentId) {
         setExpandedFolders((prev) => new Set(prev).add(parentId));
       }
-      await refreshAppData(currentUser.id);
+      setTree((prev) => insertNodeIntoTree(prev, newFolder));
       setEditingNodeId(newFolder.id);
     } catch (err) {
       console.warn('Error creating folder:', err);
@@ -354,7 +455,7 @@ export function AppShell() {
       if (parentId) {
         setExpandedFolders((prev) => new Set(prev).add(parentId));
       }
-      await refreshAppData(currentUser.id, res.node.id);
+      setTree((prev) => insertNodeIntoTree(prev, res.node));
       selectNode(res.node);
     } catch (err) {
       console.warn('Error creating note:', err);
@@ -400,12 +501,13 @@ export function AppShell() {
   const handleDeleteNode = async (nodeId: string) => {
     if (!currentUser) return;
     try {
-      await nodeService.deleteNode(nodeId);
+      // Atualização imediata na árvore da UI (0ms)
+      setTree((prevTree) => removeNodeFromTree(prevTree, nodeId));
       if (activeNode && activeNode.id === nodeId) {
         setActiveNode(null);
         setActiveNote(null);
       }
-      await refreshAppData(currentUser.id);
+      await nodeService.deleteNode(nodeId);
     } catch (err) {
       console.warn('Error deleting node:', err);
     }
@@ -417,7 +519,7 @@ export function AppShell() {
     try {
       const res = await nodeService.duplicateNote(nodeId, currentUser.id);
       if (res) {
-        await refreshAppData(currentUser.id, res.node.id);
+        setTree((prevTree) => insertNodeIntoTree(prevTree, res.node));
         selectNode(res.node);
       }
     } catch (err) {
@@ -464,10 +566,10 @@ export function AppShell() {
     if (!currentUser) return;
     try {
       const isFav = await noteService.toggleFavorite(nodeId);
+      setTree((prevTree) => updateNodeInTree(prevTree, { id: nodeId, isFavorite: isFav }));
       if (activeNode && activeNode.id === nodeId) {
         setActiveNode((prev) => (prev ? { ...prev, isFavorite: isFav } : null));
       }
-      await refreshAppData(currentUser.id);
     } catch (err) {
       console.warn('Error toggling favorite:', err);
     }

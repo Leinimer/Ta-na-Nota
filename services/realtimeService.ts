@@ -168,7 +168,8 @@ class RealtimeServiceClass {
   }
 
   /**
-   * Processa alterações na tabela `nodes`.
+   * Processa alterações na tabela `nodes` respeitando a política Last Write Wins (LWW).
+   * Se o estado local for igual ou mais recente que o evento remoto, o evento é ignorado.
    */
   private async handleNodeChange(userId: string, payload: any) {
     const eventType = payload.eventType as RealtimeEventType;
@@ -187,6 +188,23 @@ class RealtimeServiceClass {
       return;
     }
 
+    const remoteUpdatedAt = row.updated_at || new Date().toISOString();
+    const remoteTime = new Date(remoteUpdatedAt).getTime();
+
+    // 1. Consulta versão local no IndexedDB para aplicar Last Write Wins (LWW)
+    const localNode = await indexedDbService.getNode(nodeId);
+    if (localNode && localNode.updatedAt) {
+      const localTime = new Date(localNode.updatedAt).getTime();
+      if (localTime >= remoteTime) {
+        console.log('[NODE REMOTE IGNORED STALE]', {
+          nodeId,
+          localUpdatedAt: localNode.updatedAt,
+          remoteUpdatedAt,
+        });
+        return;
+      }
+    }
+
     const node: TreeNode = {
       id: row.id,
       userId: row.user_id,
@@ -195,14 +213,21 @@ class RealtimeServiceClass {
       name: row.name,
       position: Number(row.position),
       createdAt: row.created_at,
-      updatedAt: row.updated_at,
+      updatedAt: remoteUpdatedAt,
       deletedAt: row.deleted_at,
     };
+
+    console.log('[NODE REMOTE EVENT]', {
+      nodeId: node.id,
+      name: node.name,
+      eventType,
+      updatedAt: node.updatedAt,
+    });
 
     // Atualiza IndexedDB local
     await indexedDbService.saveNode(node);
 
-    // Notifica AppShell para atualizar sidebar sem reload
+    // Notifica AppShell para atualizar sidebar cirurgicamente sem reconstruir toda a árvore
     this.notifyListeners({
       type: 'node',
       eventType,

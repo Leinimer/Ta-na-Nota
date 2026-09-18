@@ -55,6 +55,10 @@ export function NoteEditor({
   const [mode, setMode] = useState<'visual' | 'markdown'>('visual');
   const titleRef = useRef(node.name ?? '');
 
+  // Ref que indica se o usuário está ativamente editando o título localmente no editor
+  // Enquanto true, impede que node.name externo ou ecos sobrescrevam o documentTitle
+  const localTitleEditRef = useRef(false);
+
   // Refs para controle estrito e separação entre edição local e dados remotos
   const localEditRevisionRef = useRef(0);
   const lastPersistedVersionRef = useRef<number>(note.version || 1);
@@ -73,6 +77,7 @@ export function NoteEditor({
     lastPersistedMarkdownRef.current = note.markdownContent || '';
     lastEditedMarkdownRef.current = note.markdownContent || '';
     titleRef.current = node.name ?? '';
+    localTitleEditRef.current = false;
     if (saveTimerRef.current) {
       clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
@@ -207,6 +212,16 @@ export function NoteEditor({
             lastPersistedVersionRef.current += 1;
             lastPersistedUpdatedAtRef.current = new Date().toISOString();
           }
+
+          // Libera o lock de edição local do título após persistência
+          localTitleEditRef.current = false;
+
+          console.log('[TITLE SAVED LOCAL]', {
+            title: titleRef.current,
+            noteVersion: lastPersistedVersionRef.current,
+            nodeUpdatedAt: lastPersistedUpdatedAtRef.current,
+          });
+
           console.log('[EDITOR LOCAL SAVE]', {
             noteId: node.id,
             title: titleRef.current,
@@ -214,6 +229,7 @@ export function NoteEditor({
             updatedAt: lastPersistedUpdatedAtRef.current,
           });
         } catch (err) {
+          localTitleEditRef.current = false;
           console.warn('[NoteEditor] Erro ao persistir nota:', err);
         }
       }, 400);
@@ -348,17 +364,27 @@ export function NoteEditor({
         setTags(MarkdownService.extractTags(md));
 
         // Sync title with documentTitle node (first node)
+        // O primeiro bloco documentTitle é a fonte canônica do título durante a edição
         const firstNode = ed.state.doc.firstChild;
-        if (firstNode && firstNode.type.name === 'documentTitle') {
-          const currentText = firstNode.textContent;
-          if (currentText !== titleRef.current) {
-            titleRef.current = currentText;
-            console.log('[EDITOR TITLE UPDATE]', {
-              noteId: node.id,
-              title: currentText,
-            });
-            onUpdateTitle(node.id, currentText);
-          }
+        const title = firstNode?.type.name === 'documentTitle' ? firstNode.textContent : '';
+
+        if (title !== titleRef.current) {
+          localTitleEditRef.current = true;
+          titleRef.current = title;
+
+          console.log('[TITLE LOCAL]', {
+            title,
+            noteVersion: lastPersistedVersionRef.current,
+            nodeUpdatedAt: new Date().toISOString(),
+          });
+
+          console.log('[EDITOR TITLE UPDATE]', {
+            noteId: node.id,
+            title,
+          });
+
+          // Atualização imediata apenas do espelho visual da sidebar (0ms)
+          onUpdateTitle(node.id, title);
         }
 
         triggerSave(md, json);
@@ -367,16 +393,22 @@ export function NoteEditor({
     [note.id]
   );
 
-  // Sincroniza alteração EXTERNA de nome (ex: renomeação pela sidebar)
+  // Sincroniza alteração EXTERNA de nome (ex: renomeação explícita pela sidebar)
   // Diretamente no primeiro bloco documentTitle do Tiptap via transação atômica
   useEffect(() => {
+    // 1. Enquanto o usuário estiver ativamente editando o título localmente no editor,
+    // o node.name externo NÃO pode alterar o documentTitle
+    if (localTitleEditRef.current) {
+      return;
+    }
+
     const externalName = node.name ?? '';
-    // 1. Se o nome externo for idêntico ao que o editor já tem em titleRef.current, NÃO faz nada (evita eco da própria digitação)
+    // 2. Se o nome externo for idêntico ao que o editor já tem em titleRef.current, NÃO faz nada (evita eco da própria digitação)
     if (externalName === titleRef.current) {
       return;
     }
 
-    // 2. Se o editor estiver ativo e o usuário estiver focado no documentTitle, a edição local é soberana
+    // 3. Se o editor estiver ativo e o usuário estiver focado no documentTitle, a edição local é soberana
     if (editor && !editor.isDestroyed) {
       if (editor.isFocused) {
         const { $from } = editor.state.selection;

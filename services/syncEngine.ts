@@ -22,8 +22,10 @@ export function toCanonicalUuid(id: string | null | undefined): string {
 type SyncStatusListener = (status: SyncStatus) => void;
 
 class SyncEngineClass {
-  // Controle de concorrência por nodeId para garantir serialização de requisições de uma mesma nota
+  // Controle de concorrência por nodeId para garantir serialização de requisições de uma mesma nota e nó
   private inFlightNotes = new Set<string>();
+  private inFlightNodes = new Set<string>();
+  private pendingNodeSaves = new Map<string, TreeNode>();
 
   // Dicionários em memória para evitar requisições redundantes de Tags, Links e Nodes
   private lastSyncedTags = new Map<string, string>(); // canonicalNoteId -> sortedTagIds
@@ -169,6 +171,7 @@ class SyncEngineClass {
   /**
    * Sincroniza um registro na tabela `nodes` do Supabase de forma idempotente (upsert).
    * Evita chamadas repetidas caso o nó não tenha sofrido alterações recentes.
+   * Possui controle de concorrência por nodeId para evitar corridas locais vs remotas.
    */
   async syncNode(node: TreeNode, maxRetries: number = 2): Promise<void> {
     const supabase = getSupabase();
@@ -182,42 +185,68 @@ class SyncEngineClass {
     const authUserId = await this.getAuthenticatedUserId();
     if (!authUserId) return;
 
+    // Se já houver sincronização em voo deste nó, enfileira a versão mais recente em pendingNodeSaves
+    if (this.inFlightNodes.has(node.id)) {
+      const existingPending = this.pendingNodeSaves.get(node.id);
+      if (!existingPending || new Date(node.updatedAt).getTime() >= new Date(existingPending.updatedAt).getTime()) {
+        this.pendingNodeSaves.set(node.id, node);
+      }
+      return;
+    }
+
     // Evita enviar se não mudou desde o último envio
     const lastTime = this.lastSyncedNodeTime.get(node.id);
     if (lastTime && lastTime === node.updatedAt && !node.deletedAt) {
       return;
     }
 
-    const canonicalId = toCanonicalUuid(node.id);
-    const canonicalParentId = node.parentId ? toCanonicalUuid(node.parentId) : null;
+    this.inFlightNodes.add(node.id);
+    console.log('[NODE SYNC START]', { nodeId: node.id, name: node.name, updatedAt: node.updatedAt });
 
-    const payload = {
-      id: canonicalId,
-      user_id: authUserId,
-      parent_id: canonicalParentId,
-      type: node.type,
-      name: node.name || (node.type === 'folder' ? 'Nova pasta' : 'Sem título'),
-      position: Number(node.position || 1000),
-      updated_at: node.updatedAt || new Date().toISOString(),
-      deleted_at: node.deletedAt || null,
-    };
+    try {
+      const canonicalId = toCanonicalUuid(node.id);
+      const canonicalParentId = node.parentId ? toCanonicalUuid(node.parentId) : null;
 
-    let attempt = 0;
-    while (attempt < maxRetries) {
-      attempt++;
-      try {
-        const { error } = await supabase.from('nodes').upsert(payload, { onConflict: 'id' });
-        if (!error) {
-          this.lastSyncedNodeTime.set(node.id, node.updatedAt);
-          return;
+      const payload = {
+        id: canonicalId,
+        user_id: authUserId,
+        parent_id: canonicalParentId,
+        type: node.type,
+        name: node.name || (node.type === 'folder' ? 'Nova pasta' : 'Sem título'),
+        position: Number(node.position || 1000),
+        updated_at: node.updatedAt || new Date().toISOString(),
+        deleted_at: node.deletedAt || null,
+      };
+
+      let attempt = 0;
+      while (attempt < maxRetries) {
+        attempt++;
+        try {
+          const { error } = await supabase.from('nodes').upsert(payload, { onConflict: 'id' });
+          if (!error) {
+            this.lastSyncedNodeTime.set(node.id, node.updatedAt);
+            console.log('[NODE SYNC DONE]', { nodeId: node.id, name: node.name, updatedAt: node.updatedAt });
+            break;
+          }
+          console.warn(`[SyncEngine] Erro ao sincronizar node (${attempt}/${maxRetries}):`, error.message);
+        } catch (err) {
+          console.warn(`[SyncEngine] Exceção no syncNode (${attempt}/${maxRetries}):`, err);
         }
-        console.warn(`[SyncEngine] Erro ao sincronizar node (${attempt}/${maxRetries}):`, error.message);
-      } catch (err) {
-        console.warn(`[SyncEngine] Exceção no syncNode (${attempt}/${maxRetries}):`, err);
-      }
 
-      if (attempt < maxRetries) {
-        await new Promise((res) => setTimeout(res, 300 * attempt));
+        if (attempt < maxRetries) {
+          await new Promise((res) => setTimeout(res, 300 * attempt));
+        }
+      }
+    } finally {
+      this.inFlightNodes.delete(node.id);
+
+      // Se enquanto este sync estava em voo chegou uma versão mais recente deste node, processa ela
+      const nextPending = this.pendingNodeSaves.get(node.id);
+      if (nextPending) {
+        this.pendingNodeSaves.delete(node.id);
+        this.syncNode(nextPending).catch((err) => {
+          console.warn('[SyncEngine] Falha ao processar pending node sync:', err);
+        });
       }
     }
   }

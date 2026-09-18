@@ -190,7 +190,17 @@ export const nodeService = {
     node.updatedAt = new Date().toISOString();
     await indexedDbService.saveNode(node);
 
+    console.log('[MOVE LOCAL]', {
+      nodeId: node.id,
+      targetParentId: newParentId,
+      updatedAt: node.updatedAt,
+    });
+
     // 3. Dispara sincronização remota em background sem bloquear a UI
+    console.log('[MOVE SYNC]', {
+      nodeId: node.id,
+      targetParentId: newParentId,
+    });
     syncEngine.syncNode(node).catch((err) => {
       console.warn('[nodeService] Sincronização em background falhou para nó movido:', err);
     });
