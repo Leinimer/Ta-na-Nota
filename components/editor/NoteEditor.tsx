@@ -21,6 +21,7 @@ import { SlashCommandMenu } from './SlashCommandMenu';
 import { MarkdownService } from '@/services/markdownService';
 import { linkService } from '@/services/linkService';
 import { attachmentService } from '@/services/attachmentService';
+import { realtimeService } from '@/services/realtimeService';
 import { DocumentTitle, DocumentTitleContext } from './extensions/DocumentTitle';
 import { ResizableImage } from './extensions/ResizableImage';
 
@@ -408,7 +409,17 @@ export function NoteEditor({
       return;
     }
 
-    // 3. Se o editor estiver ativo e o usuário estiver focado no documentTitle, a edição local é soberana
+    // 3. Verifica se a alteração de node.name não é eco de mutação local pendente
+    const pending = realtimeService.getPendingLocalNodeUpdate(node.id);
+    if (pending) {
+      const pendingTime = new Date(pending).getTime();
+      const nodeTime = new Date(node.updatedAt || 0).getTime();
+      if (nodeTime <= pendingTime) {
+        return;
+      }
+    }
+
+    // 4. Se o editor estiver ativo e o usuário estiver focado no documentTitle, a edição local é soberana
     if (editor && !editor.isDestroyed) {
       if (editor.isFocused) {
         const { $from } = editor.state.selection;
@@ -431,7 +442,7 @@ export function NoteEditor({
         editor.view.dispatch(tr);
       }
     }
-  }, [node.name, editor]);
+  }, [node.id, node.name, node.updatedAt, editor]);
 
   // Tratamento de atualizações remotas genuínas via Realtime (sem setContent destrutivo)
   useEffect(() => {

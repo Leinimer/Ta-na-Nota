@@ -570,9 +570,28 @@ class SyncEngineClass {
                 success = true; // Payload inválido, remove para não travar
               }
             } else if (item.entityType === 'node') {
-              const node = item.payload;
+              const node = item.payload as TreeNode;
               if (node) {
+                // 1. Verifica se ainda é a versão local mais recente no IndexedDB
+                const currentLocalNode = await indexedDbService.getNode(item.entityId);
+                if (currentLocalNode && currentLocalNode.updatedAt) {
+                  const localTime = new Date(currentLocalNode.updatedAt).getTime();
+                  const itemTime = new Date(node.updatedAt || 0).getTime();
+                  if (localTime > itemTime) {
+                    console.log('[NODE QUEUE DISCARD STALE VERSION]', {
+                      nodeId: item.entityId,
+                      queueVersion: itemTime,
+                      localVersion: localTime,
+                    });
+                    // Descarta versão antiga já superada localmente
+                    await indexedDbService.completeSyncItem(item.id, item.version);
+                    continue;
+                  }
+                }
                 success = await this.syncNode(node);
+                if (success) {
+                  realtimeService.clearPendingLocalNodeUpdate(node.id, node.updatedAt);
+                }
               } else {
                 success = true;
               }
@@ -833,6 +852,19 @@ class SyncEngineClass {
 
       // 1. Hidrata IndexedDB com os nós remotos
       for (const d of remoteNodes) {
+        const local = await indexedDbService.getNode(d.id);
+        if (local) {
+          if (local.deletedAt) {
+            // Jamais ressuscita nó que foi excluído localmente com tombstone!
+            continue;
+          }
+          const localTime = new Date(local.updatedAt || local.createdAt || 0).getTime();
+          const remoteTime = new Date(d.updated_at || d.created_at || 0).getTime();
+          if (localTime >= remoteTime) {
+            continue;
+          }
+        }
+
         const node: TreeNode = {
           id: d.id,
           userId: d.user_id,

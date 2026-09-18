@@ -2,6 +2,7 @@ import { TreeNode } from '@/types';
 import { indexedDbService } from './indexedDbService';
 import { MarkdownService } from './markdownService';
 import { syncEngine, toCanonicalUuid } from './syncEngine';
+import { realtimeService } from './realtimeService';
 
 export const nodeService = {
   /**
@@ -86,6 +87,9 @@ export const nodeService = {
       children: [],
     };
 
+    // Registra mutação local para blindar contra eco remoto
+    realtimeService.registerLocalNodeUpdate(folderNode.id, folderNode.updatedAt);
+
     // 1. Salva imediatamente no IndexedDB local
     await indexedDbService.saveNode(folderNode);
 
@@ -142,6 +146,9 @@ export const nodeService = {
       updatedAt: now,
     };
 
+    // Registra mutação local para blindar contra eco remoto
+    realtimeService.registerLocalNodeUpdate(node.id, node.updatedAt);
+
     // 1. Salva atomicamente no IndexedDB local em transação multi-store
     await indexedDbService.saveNoteAndNode(noteRecord, node);
 
@@ -159,8 +166,13 @@ export const nodeService = {
   async renameNode(nodeId: string, newName: string): Promise<void> {
     const node = await indexedDbService.getNode(nodeId);
     if (!node) return;
+    const now = new Date().toISOString();
     node.name = newName.trim();
-    node.updatedAt = new Date().toISOString();
+    node.updatedAt = now;
+
+    // Registra mutação local para blindar contra eco remoto
+    realtimeService.registerLocalNodeUpdate(node.id, now);
+
     await indexedDbService.saveNode(node);
 
     // Enfileira na sync_queue em background
@@ -189,12 +201,17 @@ export const nodeService = {
       }
     }
 
+    const now = new Date().toISOString();
     // 2. Atualizar no IndexedDB localmente
     node.parentId = newParentId;
     if (typeof newPosition === 'number') {
       node.position = newPosition;
     }
-    node.updatedAt = new Date().toISOString();
+    node.updatedAt = now;
+
+    // Registra mutação local para blindar contra eco remoto
+    realtimeService.registerLocalNodeUpdate(node.id, now);
+
     await indexedDbService.saveNode(node);
 
     console.log('[MOVE LOCAL]', {
@@ -224,6 +241,9 @@ export const nodeService = {
     node.deletedAt = now;
     node.updatedAt = now;
 
+    // Registra tombstone no realtimeService imediatamente
+    realtimeService.registerLocalNodeUpdate(node.id, now, true);
+
     // Se for uma pasta, marca recursivamente todos os nós filhos como excluídos em lote
     if (node.type === 'folder') {
       const allNodes = await indexedDbService.getAllNodes(node.userId);
@@ -234,6 +254,7 @@ export const nodeService = {
         for (const child of children) {
           child.deletedAt = now;
           child.updatedAt = now;
+          realtimeService.registerLocalNodeUpdate(child.id, now, true);
           affectedNodes.push(child);
           if (child.type === 'folder') {
             collectDescendants(child.id);

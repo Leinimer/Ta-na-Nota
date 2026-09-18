@@ -3,6 +3,7 @@ import { indexedDbService } from './indexedDbService';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import { MarkdownService } from './markdownService';
 import { syncEngine, toCanonicalUuid } from './syncEngine';
+import { realtimeService } from './realtimeService';
 
 export function extractTitleFromEditorContent(editorContent: any, markdownContent?: string): string {
   if (editorContent && typeof editorContent === 'object' && Array.isArray(editorContent.content)) {
@@ -156,6 +157,9 @@ export const noteService = {
       node.name = extractedTitle;
       node.updatedAt = now;
 
+      // Registra mutação local para blindar contra eco remoto da própria digitação
+      realtimeService.registerLocalNodeUpdate(node.id, now);
+
       // 1. Persistência local atômica em transação única multi-store no IndexedDB
       await indexedDbService.saveNoteAndNode(existing, node);
 
@@ -235,6 +239,7 @@ export const noteService = {
     if (node) {
       node.isFavorite = note.isFavorite;
       node.updatedAt = note.updatedAt;
+      realtimeService.registerLocalNodeUpdate(node.id, node.updatedAt);
       await indexedDbService.saveNoteAndNode(note, node);
       syncEngine.enqueueNode(node).catch((err) => {
         console.warn('[toggleFavorite] Falha ao enfileirar node favorito:', err);

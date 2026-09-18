@@ -48,6 +48,49 @@ class RealtimeServiceClass {
   private listeners: Set<RealtimeListener> = new Set();
   private isSubscribing = false;
 
+  // Rastreio de mutações locais pendentes para proteção rigorosa contra eco remoto
+  private pendingLocalNodeUpdates = new Map<string, string>(); // nodeId -> updatedAt ISO string
+  private locallyDeletedNodeIds = new Set<string>(); // nodeIds marcados com tombstone local
+
+  /**
+   * Registra uma mutação local para que qualquer eco remoto igual ou anterior seja descartado.
+   */
+  registerLocalNodeUpdate(nodeId: string, updatedAt: string, isDeleted: boolean = false) {
+    this.pendingLocalNodeUpdates.set(nodeId, updatedAt);
+    if (isDeleted) {
+      this.locallyDeletedNodeIds.add(nodeId);
+    }
+  }
+
+  isNodeDeletedLocally(nodeId: string): boolean {
+    return this.locallyDeletedNodeIds.has(nodeId);
+  }
+
+  getPendingLocalNodeUpdate(nodeId: string): string | undefined {
+    return this.pendingLocalNodeUpdates.get(nodeId);
+  }
+
+  clearPendingLocalNodeUpdate(nodeId: string, remoteUpdatedAt?: string) {
+    if (!remoteUpdatedAt) {
+      this.pendingLocalNodeUpdates.delete(nodeId);
+      return;
+    }
+    const current = this.pendingLocalNodeUpdates.get(nodeId);
+    if (current) {
+      const curTime = new Date(current).getTime();
+      const remTime = new Date(remoteUpdatedAt).getTime();
+      if (remTime >= curTime) {
+        this.pendingLocalNodeUpdates.delete(nodeId);
+      }
+    }
+  }
+
+  loadTombstoneIds(ids: string[]) {
+    for (const id of ids) {
+      this.locallyDeletedNodeIds.add(id);
+    }
+  }
+
   /**
    * Adiciona um ouvinte para alterações originadas remotamente via Realtime.
    */
@@ -170,6 +213,7 @@ class RealtimeServiceClass {
   /**
    * Processa alterações na tabela `nodes` respeitando a política Last Write Wins (LWW).
    * Se o estado local for igual ou mais recente que o evento remoto, o evento é ignorado.
+   * Nós excluídos localmente (tombstones) NUNCA podem ser ressuscitados por eventos remotos desatualizados.
    */
   private async handleNodeChange(userId: string, payload: any) {
     const eventType = payload.eventType as RealtimeEventType;
@@ -177,8 +221,20 @@ class RealtimeServiceClass {
     if (!row || (row.user_id && row.user_id !== userId)) return;
 
     const nodeId = row.id;
+    const remoteUpdatedAt = row.updated_at || new Date().toISOString();
+    const remoteTime = new Date(remoteUpdatedAt).getTime();
 
+    // 1. Tratamento para evento DELETE físico do PostgreSQL
     if (eventType === 'DELETE') {
+      const localNode = await indexedDbService.getNode(nodeId);
+      if (localNode && localNode.updatedAt) {
+        const localTime = new Date(localNode.updatedAt).getTime();
+        if (localTime > remoteTime) {
+          // DELETE remoto mais antigo que mutação local: ignora
+          return;
+        }
+      }
+      this.locallyDeletedNodeIds.add(nodeId);
       await indexedDbService.deleteNode(nodeId);
       this.notifyListeners({
         type: 'node',
@@ -188,36 +244,97 @@ class RealtimeServiceClass {
       return;
     }
 
-    const remoteUpdatedAt = row.updated_at || new Date().toISOString();
-    const remoteTime = new Date(remoteUpdatedAt).getTime();
+    // 2. Proteção contra eco local de nós excluídos (tombstone ativo em memória)
+    if (this.locallyDeletedNodeIds.has(nodeId)) {
+      const pendingTimeStr = this.pendingLocalNodeUpdates.get(nodeId);
+      const pendingTime = pendingTimeStr ? new Date(pendingTimeStr).getTime() : 0;
+      // Se o evento remoto não for uma deleção explícita ou tiver timestamp <= exclusão local: IGNORE
+      if (!row.deleted_at || remoteTime <= pendingTime) {
+        console.log('[NODE REMOTE IGNORED LOCALLY DELETED]', { nodeId, remoteUpdatedAt });
+        return;
+      }
+    }
 
-    // 1. Consulta versão local no IndexedDB para aplicar Last Write Wins (LWW)
-    const localNode = await indexedDbService.getNode(nodeId);
-    if (localNode && localNode.updatedAt) {
-      const localTime = new Date(localNode.updatedAt).getTime();
-      if (localTime >= remoteTime) {
-        console.log('[NODE REMOTE IGNORED STALE]', {
+    // 3. Proteção contra eco de mutações locais pendentes (create, rename, move, title)
+    const pendingUpdate = this.pendingLocalNodeUpdates.get(nodeId);
+    if (pendingUpdate) {
+      const pendingTime = new Date(pendingUpdate).getTime();
+      if (remoteTime <= pendingTime) {
+        console.log('[NODE REMOTE IGNORED LOCAL PENDING ECHO]', {
           nodeId,
-          localUpdatedAt: localNode.updatedAt,
+          pendingUpdate,
           remoteUpdatedAt,
         });
         return;
       }
     }
 
+    // 4. Consulta versão local no IndexedDB para aplicar Last Write Wins (LWW)
+    const localNode = await indexedDbService.getNode(nodeId);
+    if (localNode) {
+      if (localNode.deletedAt) {
+        // O nó local está marcado com tombstone no IndexedDB!
+        const localTime = new Date(localNode.updatedAt || localNode.deletedAt).getTime();
+        // Se o evento remoto não for um delete explícito ou tiver timestamp menor ou igual:
+        if (!row.deleted_at || remoteTime <= localTime) {
+          console.log('[NODE REMOTE IGNORED LOCAL TOMBSTONE]', {
+            nodeId,
+            localUpdatedAt: localNode.updatedAt,
+            remoteUpdatedAt,
+          });
+          return;
+        }
+      } else if (localNode.updatedAt) {
+        const localTime = new Date(localNode.updatedAt).getTime();
+        if (localTime >= remoteTime) {
+          console.log('[NODE REMOTE IGNORED STALE]', {
+            nodeId,
+            localUpdatedAt: localNode.updatedAt,
+            remoteUpdatedAt,
+          });
+          return;
+        }
+      }
+    }
+
+    // 5. Se o evento remoto for soft-delete (row.deleted_at preenchido)
+    if (row.deleted_at) {
+      this.locallyDeletedNodeIds.add(nodeId);
+      const tombstoneNode: TreeNode = {
+        id: row.id,
+        userId: row.user_id,
+        parentId: row.parent_id,
+        type: row.type,
+        name: row.name,
+        position: Number(row.position || 0),
+        createdAt: row.created_at,
+        updatedAt: remoteUpdatedAt,
+        deletedAt: row.deleted_at,
+      };
+      await indexedDbService.saveNode(tombstoneNode);
+      this.notifyListeners({
+        type: 'node',
+        eventType: 'DELETE',
+        nodeId,
+        node: tombstoneNode,
+      });
+      return;
+    }
+
+    // 6. Evento remoto válido e mais recente que o local
     const node: TreeNode = {
       id: row.id,
       userId: row.user_id,
       parentId: row.parent_id,
       type: row.type,
       name: row.name,
-      position: Number(row.position),
+      position: Number(row.position || 0),
       createdAt: row.created_at,
       updatedAt: remoteUpdatedAt,
       deletedAt: row.deleted_at,
     };
 
-    console.log('[NODE REMOTE EVENT]', {
+    console.log('[NODE REMOTE EVENT APPLIED]', {
       nodeId: node.id,
       name: node.name,
       eventType,
@@ -248,6 +365,16 @@ class RealtimeServiceClass {
     const nodeId = row.node_id;
     const noteId = row.id;
 
+    // Se o nó ao qual a nota pertence foi excluído localmente, ignora qualquer evento da nota
+    if (this.locallyDeletedNodeIds.has(nodeId)) {
+      return;
+    }
+    const localNode = await indexedDbService.getNode(nodeId);
+    if (localNode?.deletedAt) {
+      this.locallyDeletedNodeIds.add(nodeId);
+      return;
+    }
+
     if (eventType === 'DELETE') {
       await indexedDbService.deleteNote(noteId);
       this.notifyListeners({
@@ -260,7 +387,6 @@ class RealtimeServiceClass {
 
     const remoteVersion = Number(row.version || 1);
     const remoteUpdatedAt = row.updated_at || new Date().toISOString();
-    const remoteTime = new Date(remoteUpdatedAt).getTime();
 
     // 1. Consulta versão local no IndexedDB
     const localNote =

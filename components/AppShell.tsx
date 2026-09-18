@@ -111,8 +111,16 @@ function applyNodeChangeToTree(
   tree: TreeNode[],
   event: { eventType: string; node?: TreeNode; nodeId: string }
 ): TreeNode[] {
-  if (event.eventType === 'DELETE') {
-    return removeNodeFromTree(tree, event.nodeId);
+  const targetId = event.nodeId || event.node?.id;
+  if (!targetId) return tree;
+
+  // 1. Regra prioritária absoluta: DELETE ou Tombstone
+  if (
+    event.eventType === 'DELETE' ||
+    Boolean(event.node?.deletedAt) ||
+    realtimeService.isNodeDeletedLocally(targetId)
+  ) {
+    return removeNodeFromTree(tree, targetId);
   }
 
   if (!event.node) {
@@ -120,24 +128,31 @@ function applyNodeChangeToTree(
   }
 
   const node = event.node;
-  if (node.deletedAt) {
-    return removeNodeFromTree(tree, node.id);
+
+  // 2. Proteção contra eco de mutação local pendente
+  const pendingTimestamp = realtimeService.getPendingLocalNodeUpdate(node.id);
+  if (pendingTimestamp) {
+    const pendingTime = new Date(pendingTimestamp).getTime();
+    const eventTime = new Date(node.updatedAt).getTime();
+    if (eventTime <= pendingTime) {
+      return tree;
+    }
   }
 
-  // Verifica se o nó já existe na árvore
+  // 3. Verifica se o nó já existe na árvore
   const existingNode = findNodeInTree(tree, node.id);
 
   if (!existingNode) {
     return insertNodeIntoTree(tree, node);
   }
 
-  // Se mudou de parentId, move
+  // 4. Se mudou de parentId, move
   if (existingNode.parentId !== node.parentId) {
     const moved = moveNodeInTree(tree, node.id, node.parentId);
     return updateNodeInTree(moved, node);
   }
 
-  // Apenas atualização de propriedades (nome, posição, etc.)
+  // 5. Apenas atualização de propriedades (nome, posição, etc.)
   return updateNodeInTree(tree, node);
 }
 
@@ -305,6 +320,8 @@ export function AppShell() {
         if (user) {
           syncEngine.setAuthenticatedUserId(user.id);
           await indexedDbService.migrateLegacyIds(user.id);
+          const tombstoneIds = await indexedDbService.getTombstoneNodeIds(user.id);
+          realtimeService.loadTombstoneIds(tombstoneIds);
           await syncEngine.hydrateFromRemote(user.id);
           await refreshAppData(user.id);
         }
@@ -351,8 +368,38 @@ export function AppShell() {
         const currentActiveNote = activeNoteRef.current;
 
         if (event.type === 'node') {
+          const targetId = event.nodeId || event.node?.id;
+          const isDeleted =
+            event.eventType === 'DELETE' ||
+            Boolean(event.node?.deletedAt) ||
+            (targetId ? realtimeService.isNodeDeletedLocally(targetId) : false);
+
+          // Se for exclusão ou tombstone: remove imediatamente e encerra
+          if (isDeleted) {
+            if (targetId) {
+              setTree((prevTree) => removeNodeFromTree(prevTree, targetId));
+              if (activeNodeRef.current && activeNodeRef.current.id === targetId) {
+                setActiveNode(null);
+                setActiveNote(null);
+              }
+            }
+            return;
+          }
+
+          // Se for eco local de mutação pendente, ignora
+          if (event.node) {
+            const pending = realtimeService.getPendingLocalNodeUpdate(event.node.id);
+            if (pending) {
+              const pendingTime = new Date(pending).getTime();
+              const eventTime = new Date(event.node.updatedAt).getTime();
+              if (eventTime <= pendingTime) {
+                return;
+              }
+            }
+          }
+
           console.log('[REALTIME NODE TITLE]', {
-            nodeId: event.nodeId || event.node?.id,
+            nodeId: targetId,
             name: event.node?.name,
             eventType: event.eventType,
           });
@@ -360,10 +407,7 @@ export function AppShell() {
           // Atualização cirúrgica e incremental da árvore sem recarregar tudo com getTree()
           setTree((prevTree) => applyNodeChangeToTree(prevTree, event));
 
-          if (event.eventType === 'DELETE' && currentActiveNode && currentActiveNode.id === event.nodeId) {
-            setActiveNode(null);
-            setActiveNote(null);
-          } else if (event.node && currentActiveNode && currentActiveNode.id === event.node.id) {
+          if (event.node && currentActiveNode && currentActiveNode.id === event.node.id) {
             if (activeNodeRef.current) {
               activeNodeRef.current = { ...activeNodeRef.current, ...event.node };
             }
@@ -467,6 +511,10 @@ export function AppShell() {
   const handleRenameNode = (nodeId: string, newName: string) => {
     if (!currentUser) return;
     const finalName = newName.trim();
+    const now = new Date().toISOString();
+
+    // Registra mutação local para blindar contra eco remoto
+    realtimeService.registerLocalNodeUpdate(nodeId, now);
 
     // 1. Atualização otimista imediata na árvore da Sidebar (0ms)
     setTree((prevTree) => updateNodeNameInTree(prevTree, nodeId, finalName));
@@ -474,7 +522,8 @@ export function AppShell() {
     // 2. Atualiza nó ativo se for o mesmo (passado ao NoteEditor)
     if (activeNodeRef.current && activeNodeRef.current.id === nodeId) {
       activeNodeRef.current.name = finalName;
-      setActiveNode((prev) => (prev && prev.id === nodeId ? { ...prev, name: finalName } : prev));
+      activeNodeRef.current.updatedAt = now;
+      setActiveNode((prev) => (prev && prev.id === nodeId ? { ...prev, name: finalName, updatedAt: now } : prev));
     }
 
     // 3. Persistência no IndexedDB e sincronização em background (não bloqueia UI)
@@ -486,6 +535,10 @@ export function AppShell() {
   // 6b. Live Title Update (digitação no título da nota com resposta visual instantânea e 0 recriações de nó)
   const handleUpdateTitleLive = (nodeId: string, newTitle: string) => {
     const displayName = newTitle;
+    const now = new Date().toISOString();
+
+    // Registra mutação local para que o Realtime ignore eco da própria digitação
+    realtimeService.registerLocalNodeUpdate(nodeId, now);
 
     // 1. Atualização imediata em memória na árvore (Sidebar atualiza em 0ms)
     setTree((prevTree) => updateNodeNameInTree(prevTree, nodeId, displayName));
@@ -493,19 +546,26 @@ export function AppShell() {
     // Atualiza activeNodeRef em memória sem recriar activeNode React state a cada tecla digitada
     if (activeNodeRef.current && activeNodeRef.current.id === nodeId) {
       activeNodeRef.current.name = displayName;
+      activeNodeRef.current.updatedAt = now;
     }
   };
 
   // 7. Delete Node
   const handleDeleteNode = (nodeId: string) => {
     if (!currentUser) return;
-    // 1. Atualização imediata na árvore da UI (0ms)
+    const now = new Date().toISOString();
+
+    // 1. Registra no RealtimeService como mutação local com tombstone (evita qualquer eco remoto)
+    realtimeService.registerLocalNodeUpdate(nodeId, now, true);
+
+    // 2. Atualização imediata na árvore da UI (0ms)
     setTree((prevTree) => removeNodeFromTree(prevTree, nodeId));
-    if (activeNode && activeNode.id === nodeId) {
+    if (activeNodeRef.current?.id === nodeId) {
       setActiveNode(null);
       setActiveNote(null);
     }
-    // 2. Persistência no IndexedDB e sincronização em background (não bloqueia UI)
+
+    // 3. Persistência no IndexedDB e sincronização em background (não bloqueia UI)
     nodeService.deleteNode(nodeId).catch((err) => {
       console.warn('Error deleting node:', err);
     });
@@ -531,6 +591,10 @@ export function AppShell() {
 
     // Guarda estado anterior para possível rollback
     const previousTree = tree;
+    const now = new Date().toISOString();
+
+    // Registra mutação local para que o Realtime do mesmo dispositivo ignore eco
+    realtimeService.registerLocalNodeUpdate(draggedId, now);
 
     // Se o destino for uma pasta, expande ela imediatamente na UI para ver o item inserido
     if (targetParentId) {
@@ -543,7 +607,9 @@ export function AppShell() {
 
     // Se o nó movido for o nó ativo, atualiza seu parentId
     if (activeNodeRef.current && activeNodeRef.current.id === draggedId) {
-      setActiveNode((prev) => (prev ? { ...prev, parentId: targetParentId } : null));
+      activeNodeRef.current.parentId = targetParentId;
+      activeNodeRef.current.updatedAt = now;
+      setActiveNode((prev) => (prev ? { ...prev, parentId: targetParentId, updatedAt: now } : null));
     }
 
     // 2. Persiste no IndexedDB e sincroniza em background (não bloqueia a UI)

@@ -129,6 +129,21 @@ export const indexedDbService = {
     });
   },
 
+  async getTombstoneNodeIds(userId: string): Promise<string[]> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('nodes', 'readonly');
+      const req = tx.objectStore('nodes').getAll();
+      req.onsuccess = () => {
+        const ids: string[] = req.result
+          .filter((n: TreeNode) => n.userId === userId && Boolean(n.deletedAt))
+          .map((n: TreeNode) => n.id);
+        resolve(ids);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  },
+
   async getNode(id: string): Promise<TreeNode | null> {
     const db = await getDB();
     return new Promise((resolve, reject) => {
@@ -458,6 +473,7 @@ export const indexedDbService = {
             if (item.version >= (val.version || 0)) {
               const updatedItem: SyncQueueItem = {
                 ...val,
+                operation: item.operation || val.operation,
                 payload: item.payload,
                 version: item.version,
                 updatedAt: new Date().toISOString(),
