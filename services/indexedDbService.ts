@@ -349,4 +349,78 @@ export const indexedDbService = {
       req.onerror = () => resolve(null);
     });
   },
+
+  /**
+   * Migra identificadores legados (com prefixos node_, folder_, note_, tag_)
+   * para UUIDs válidos e compatíveis com as tabelas do PostgreSQL no Supabase.
+   */
+  async migrateLegacyIds(userId: string): Promise<void> {
+    const db = await getDB();
+    const nodes = await this.getAllNodes(userId);
+    const notes = await this.getAllNotes(userId);
+
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const toValidUuid = (val: string | null | undefined): string => {
+      if (!val) return crypto.randomUUID();
+      const stripped = val.replace(/^(folder_|node_|note_|tag_)/i, '');
+      return uuidRegex.test(stripped) ? stripped.toLowerCase() : crypto.randomUUID();
+    };
+
+    const needsMigration = nodes.some((n) => !uuidRegex.test(n.id) || (n.parentId && !uuidRegex.test(n.parentId))) ||
+      notes.some((nt) => !uuidRegex.test(nt.id) || !uuidRegex.test(nt.nodeId));
+
+    if (!needsMigration) return;
+
+    console.info('[IndexedDB] Migrando identificadores legados para UUIDs válidos...');
+
+    const nodeIdMap = new Map<string, string>();
+    for (const n of nodes) {
+      const newId = toValidUuid(n.id);
+      nodeIdMap.set(n.id, newId);
+    }
+
+    // 1. Atualiza nós
+    const nodeTx = db.transaction('nodes', 'readwrite');
+    const nodeStore = nodeTx.objectStore('nodes');
+    for (const n of nodes) {
+      const newId = nodeIdMap.get(n.id) || n.id;
+      const newParentId = n.parentId ? (nodeIdMap.get(n.parentId) || toValidUuid(n.parentId)) : null;
+
+      if (newId !== n.id || newParentId !== n.parentId) {
+        nodeStore.delete(n.id);
+        nodeStore.put({
+          ...n,
+          id: newId,
+          parentId: newParentId,
+        });
+      }
+    }
+    await new Promise<void>((res, rej) => {
+      nodeTx.oncomplete = () => res();
+      nodeTx.onerror = () => rej(nodeTx.error);
+    });
+
+    // 2. Atualiza notas
+    const noteTx = db.transaction('notes', 'readwrite');
+    const noteStore = noteTx.objectStore('notes');
+    for (const nt of notes) {
+      const newNoteId = toValidUuid(nt.id);
+      const newNodeId = nodeIdMap.get(nt.nodeId) || toValidUuid(nt.nodeId);
+
+      if (newNoteId !== nt.id || newNodeId !== nt.nodeId) {
+        noteStore.delete(nt.id);
+        noteStore.put({
+          ...nt,
+          id: newNoteId,
+          nodeId: newNodeId,
+        });
+      }
+    }
+    await new Promise<void>((res, rej) => {
+      noteTx.oncomplete = () => res();
+      noteTx.onerror = () => rej(noteTx.error);
+    });
+
+    console.info('[IndexedDB] Migração concluída com sucesso!');
+  },
 };

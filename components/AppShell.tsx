@@ -7,6 +7,8 @@ import { nodeService } from '@/services/nodeService';
 import { noteService } from '@/services/noteService';
 import { tagService } from '@/services/tagService';
 import { exportService } from '@/services/exportService';
+import { syncEngine } from '@/services/syncEngine';
+import { indexedDbService } from '@/services/indexedDbService';
 import { Sidebar } from './sidebar/Sidebar';
 import { NoteEditor } from './editor/NoteEditor';
 import { CommandPalette } from './command-palette/CommandPalette';
@@ -129,6 +131,8 @@ export function AppShell() {
         const user = await authService.getCurrentUser();
         setCurrentUser(user);
         if (user) {
+          await indexedDbService.migrateLegacyIds(user.id);
+          await syncEngine.hydrateFromRemote(user.id);
           await refreshAppData(user.id);
         }
       } catch (err) {
@@ -364,6 +368,8 @@ export function AppShell() {
       <AuthScreen
         onAuthenticated={async (user) => {
           setCurrentUser(user);
+          await indexedDbService.migrateLegacyIds(user.id);
+          await syncEngine.hydrateFromRemote(user.id);
           await refreshAppData(user.id);
         }}
       />
@@ -543,10 +549,12 @@ export function AppShell() {
         isOpen={isAuthModalOpen}
         onClose={() => setIsAuthModalOpen(false)}
         currentUser={currentUser}
-        onUserChanged={(user) => {
+        onUserChanged={async (user) => {
           setCurrentUser(user);
           if (user) {
-            refreshAppData(user.id);
+            await indexedDbService.migrateLegacyIds(user.id);
+            await syncEngine.hydrateFromRemote(user.id);
+            await refreshAppData(user.id);
           } else {
             setActiveNode(null);
             setActiveNote(null);

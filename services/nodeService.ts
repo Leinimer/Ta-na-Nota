@@ -1,56 +1,25 @@
 import { TreeNode } from '@/types';
 import { indexedDbService } from './indexedDbService';
-import { getSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import { MarkdownService } from './markdownService';
+import { syncEngine, toCanonicalUuid } from './syncEngine';
 
 export const nodeService = {
   /**
    * Retrieves all active nodes for user and constructs the nested hierarchy tree
    */
   async getTree(userId: string): Promise<TreeNode[]> {
-    const supabase = getSupabase();
-    let nodes: TreeNode[] = [];
+    // 1. Obtém todos os nós ativos do cache local IndexedDB (que é hidratado pelo syncEngine na inicialização)
+    let nodes = await indexedDbService.getAllNodes(userId);
+    nodes = nodes.filter((n) => !n.deletedAt);
 
-    if (supabase && isSupabaseConfigured) {
-      try {
-        const { data, error } = await supabase
-          .from('nodes')
-          .select('id, user_id, parent_id, type, name, position, created_at, updated_at, deleted_at')
-          .eq('user_id', userId)
-          .is('deleted_at', null)
-          .order('position', { ascending: true });
-
-        if (!error && data) {
-          nodes = data.map((d: any) => ({
-            id: d.id,
-            userId: d.user_id,
-            parentId: d.parent_id,
-            type: d.type,
-            name: d.name,
-            position: Number(d.position),
-            createdAt: d.created_at,
-            updatedAt: d.updated_at,
-            deletedAt: d.deleted_at,
-          }));
-          // Sync to indexedDB cache
-          for (const n of nodes) await indexedDbService.saveNode(n);
-        }
-      } catch (err) {
-        console.warn('Supabase fetch failed, using local IndexedDB', err);
-      }
-    }
-
-    if (nodes.length === 0) {
-      nodes = await indexedDbService.getAllNodes(userId);
-    }
-
-    // Attach note favorites & lastOpened if type === 'note'
+    // 2. Anexa favoritos e noteId das notas correspondentes
     const allNotes = await indexedDbService.getAllNotes(userId);
-    const noteMap = new Map(allNotes.map((n) => [n.nodeId, n]));
+    const noteMap = new Map(allNotes.map((n) => [toCanonicalUuid(n.nodeId), n]));
 
     for (const node of nodes) {
       if (node.type === 'note') {
-        const note = noteMap.get(node.id);
+        const canonicalId = toCanonicalUuid(node.id);
+        const note = noteMap.get(canonicalId) || noteMap.get(node.id);
         if (note) {
           node.isFavorite = note.isFavorite;
           node.lastOpenedAt = note.lastOpenedAt;
@@ -59,7 +28,7 @@ export const nodeService = {
       }
     }
 
-    // Build hierarchy
+    // 3. Constrói a hierarquia de pastas e notas
     return this.buildTreeHierarchy(nodes);
   },
 
@@ -98,10 +67,10 @@ export const nodeService = {
   },
 
   async createFolder(userId: string, name: string, parentId: string | null = null): Promise<TreeNode> {
-    const id = 'folder_' + crypto.randomUUID();
+    const id = crypto.randomUUID();
     const now = new Date().toISOString();
     const all = await indexedDbService.getAllNodes(userId);
-    const siblings = all.filter((n) => n.parentId === parentId);
+    const siblings = all.filter((n) => n.parentId === parentId && !n.deletedAt);
     const maxPos = siblings.reduce((max, n) => Math.max(max, n.position), 0);
     const position = maxPos + 1000;
 
@@ -110,30 +79,18 @@ export const nodeService = {
       userId,
       parentId,
       type: 'folder',
-      name: name.trim() || 'Nova Pasta',
+      name: name.trim() || 'Nova pasta',
       position,
       createdAt: now,
       updatedAt: now,
       children: [],
     };
 
+    // 1. Salva imediatamente no IndexedDB local
     await indexedDbService.saveNode(folderNode);
 
-    const supabase = getSupabase();
-    if (supabase && isSupabaseConfigured) {
-      try {
-        await supabase.from('nodes').insert({
-          id: folderNode.id,
-          user_id: userId,
-          parent_id: parentId,
-          type: 'folder',
-          name: folderNode.name,
-          position,
-        });
-      } catch (err) {
-        console.warn('Sync folder to supabase error:', err);
-      }
-    }
+    // 2. Sincroniza com o Supabase
+    await syncEngine.syncNode(folderNode);
 
     return folderNode;
   },
@@ -144,11 +101,11 @@ export const nodeService = {
     parentId: string | null = null,
     initialMarkdown: string = ''
   ): Promise<{ node: TreeNode; noteId: string }> {
-    const nodeId = 'node_' + crypto.randomUUID();
-    const noteId = 'note_' + crypto.randomUUID();
+    const nodeId = crypto.randomUUID();
+    const noteId = crypto.randomUUID();
     const now = new Date().toISOString();
     const all = await indexedDbService.getAllNodes(userId);
-    const siblings = all.filter((n) => n.parentId === parentId);
+    const siblings = all.filter((n) => n.parentId === parentId && !n.deletedAt);
     const maxPos = siblings.reduce((max, n) => Math.max(max, n.position), 0);
     const position = maxPos + 1000;
 
@@ -183,35 +140,13 @@ export const nodeService = {
       updatedAt: now,
     };
 
-    // Save atomically in local IndexedDB
+    // 1. Salva atomicamente no IndexedDB local
     await indexedDbService.saveNode(node);
     await indexedDbService.saveNote(noteRecord);
 
-    // Sync to Supabase if available
-    const supabase = getSupabase();
-    if (supabase && isSupabaseConfigured) {
-      try {
-        await supabase.from('nodes').insert({
-          id: nodeId,
-          user_id: userId,
-          parent_id: parentId,
-          type: 'note',
-          name: nodeName,
-          position,
-        });
-        await supabase.from('notes').insert({
-          id: noteId,
-          node_id: nodeId,
-          user_id: userId,
-          markdown_content: initialMarkdown,
-          editor_content: initialJson,
-          is_favorite: false,
-          last_opened_at: now,
-        });
-      } catch (err) {
-        console.warn('Sync note to supabase error:', err);
-      }
-    }
+    // 2. Sincroniza imediatamente com o Supabase (node primeiro, depois a note)
+    await syncEngine.syncNode(node);
+    await syncEngine.syncNote(noteRecord);
 
     return { node, noteId };
   },
@@ -223,18 +158,12 @@ export const nodeService = {
     node.updatedAt = new Date().toISOString();
     await indexedDbService.saveNode(node);
 
-    const supabase = getSupabase();
-    if (supabase && isSupabaseConfigured) {
-      try {
-        await supabase.from('nodes').update({ name: node.name, updated_at: node.updatedAt }).eq('id', nodeId);
-      } catch (err) {
-        console.warn('Supabase rename error:', err);
-      }
-    }
+    // Sincroniza com o Supabase
+    await syncEngine.syncNode(node);
   },
 
   async moveNode(nodeId: string, newParentId: string | null, newPosition?: number): Promise<boolean> {
-    // 1. Prevent cycle: newParent cannot be nodeId or any descendant of nodeId
+    // 1. Previne ciclos: novo pai não pode ser o próprio nó nem nenhum descendente
     if (newParentId === nodeId) {
       return false;
     }
@@ -246,7 +175,6 @@ export const nodeService = {
       let cur: string | null = newParentId;
       while (cur) {
         if (cur === nodeId) {
-          // Circular hierarchy attempt!
           return false;
         }
         const parent = await indexedDbService.getNode(cur);
@@ -261,31 +189,36 @@ export const nodeService = {
     node.updatedAt = new Date().toISOString();
     await indexedDbService.saveNode(node);
 
-    const supabase = getSupabase();
-    if (supabase && isSupabaseConfigured) {
-      try {
-        await supabase.from('nodes').update({
-          parent_id: newParentId,
-          position: node.position,
-          updated_at: node.updatedAt,
-        }).eq('id', nodeId);
-      } catch (err) {
-        console.warn('Supabase move error:', err);
-      }
-    }
+    // Sincroniza com o Supabase
+    await syncEngine.syncNode(node);
 
     return true;
   },
 
   async deleteNode(nodeId: string): Promise<void> {
-    await indexedDbService.deleteNodeSoft(nodeId);
-    const supabase = getSupabase();
-    if (supabase && isSupabaseConfigured) {
-      try {
-        await supabase.from('nodes').update({ deleted_at: new Date().toISOString() }).eq('id', nodeId);
-      } catch (err) {
-        console.warn('Supabase delete error:', err);
-      }
+    const now = new Date().toISOString();
+    const node = await indexedDbService.getNode(nodeId);
+    if (!node) return;
+
+    node.deletedAt = now;
+    await indexedDbService.saveNode(node);
+    await syncEngine.syncNode(node);
+
+    // Se for uma pasta, marca recursivamente todos os nós filhos como excluídos
+    if (node.type === 'folder') {
+      const allNodes = await indexedDbService.getAllNodes(node.userId);
+      const markDescendants = async (parentId: string) => {
+        const children = allNodes.filter((n) => n.parentId === parentId && !n.deletedAt);
+        for (const child of children) {
+          child.deletedAt = now;
+          await indexedDbService.saveNode(child);
+          await syncEngine.syncNode(child);
+          if (child.type === 'folder') {
+            await markDescendants(child.id);
+          }
+        }
+      };
+      await markDescendants(nodeId);
     }
   },
 

@@ -1,5 +1,6 @@
 import { TagRecord, TreeNode } from '@/types';
 import { indexedDbService } from './indexedDbService';
+import { syncEngine } from './syncEngine';
 
 export const tagService = {
   async getTagsWithCount(userId: string): Promise<TagRecord[]> {
@@ -72,19 +73,22 @@ export const tagService = {
 
     if (!tag) {
       tag = {
-        id: `tag-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        id: crypto.randomUUID(),
         userId,
         name: cleanName,
         normalizedName: normalized,
         createdAt: new Date().toISOString(),
       };
       await indexedDbService.saveTag(tag);
+      await syncEngine.syncTag(tag);
     }
 
     // Attach to note
     const currentTagIds = await indexedDbService.getNoteTags(noteId);
     if (!currentTagIds.includes(tag.id)) {
-      await indexedDbService.setNoteTags(userId, noteId, [...currentTagIds, tag.id]);
+      const updated = [...currentTagIds, tag.id];
+      await indexedDbService.setNoteTags(userId, noteId, updated);
+      await syncEngine.syncNoteTags(userId, noteId, updated);
     }
 
     return this.getTagsForNote(noteId, userId);
@@ -94,6 +98,7 @@ export const tagService = {
     const currentTagIds = await indexedDbService.getNoteTags(noteId);
     const updatedIds = currentTagIds.filter((id) => id !== tagId);
     await indexedDbService.setNoteTags(userId, noteId, updatedIds);
+    await syncEngine.syncNoteTags(userId, noteId, updatedIds);
     return this.getTagsForNote(noteId, userId);
   },
 };
