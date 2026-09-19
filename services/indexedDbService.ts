@@ -129,6 +129,19 @@ export const indexedDbService = {
     });
   },
 
+  async getAllNodesRaw(userId: string): Promise<TreeNode[]> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('nodes', 'readonly');
+      const req = tx.objectStore('nodes').getAll();
+      req.onsuccess = () => {
+        const list: TreeNode[] = req.result.filter((n: TreeNode) => n.userId === userId);
+        resolve(list.sort((a, b) => a.position - b.position));
+      };
+      req.onerror = () => reject(req.error);
+    });
+  },
+
   async getTombstoneNodeIds(userId: string): Promise<string[]> {
     const db = await getDB();
     return new Promise((resolve, reject) => {
@@ -458,49 +471,38 @@ export const indexedDbService = {
     return new Promise((resolve, reject) => {
       const tx = db.transaction('sync_queue', 'readwrite');
       const store = tx.objectStore('sync_queue');
+      const targetId = item.id || `sync_${item.entityType}_${item.entityId}`;
 
-      // Busca item pendente existente para o mesmo entityId
-      const req = store.openCursor();
-      let foundExisting = false;
-
-      req.onsuccess = (e) => {
-        const cursor = (e.target as IDBRequest).result as IDBCursorWithValue;
-        if (cursor) {
-          const val = cursor.value as SyncQueueItem;
-          if (val.userId === item.userId && val.entityId === item.entityId && val.status === 'pending') {
-            foundExisting = true;
-            // Coalescing: se a versão nova for igual ou mais recente, substitui o payload e atualiza version
-            if (item.version >= (val.version || 0)) {
-              const updatedItem: SyncQueueItem = {
-                ...val,
-                operation: item.operation || val.operation,
-                payload: item.payload,
-                version: item.version,
-                updatedAt: new Date().toISOString(),
-                attempts: 0,
-                nextAttemptAt: 0,
-                lastError: undefined,
-              };
-              cursor.update(updatedItem);
-            }
-            // Se já encontrou, não precisa continuar iterando
-            return;
-          }
-          cursor.continue();
-        } else {
-          // Se não encontrou item pendente pré-existente para esta entidade, insere novo
-          if (!foundExisting) {
-            const newItem: SyncQueueItem = {
+      const req = store.get(targetId);
+      req.onsuccess = () => {
+        const existing = req.result as SyncQueueItem | undefined;
+        if (existing) {
+          const newVersion = item.version !== undefined ? Number(item.version) : 0;
+          const oldVersion = existing.version !== undefined ? Number(existing.version) : 0;
+          if (newVersion >= oldVersion) {
+            const updatedItem: SyncQueueItem = {
+              ...existing,
               ...item,
-              id: item.id || crypto.randomUUID(),
+              id: targetId,
               status: 'pending',
               attempts: 0,
               nextAttemptAt: 0,
-              createdAt: item.createdAt || new Date().toISOString(),
+              lastError: undefined,
               updatedAt: new Date().toISOString(),
             };
-            store.put(newItem);
+            store.put(updatedItem);
           }
+        } else {
+          const newItem: SyncQueueItem = {
+            ...item,
+            id: targetId,
+            status: 'pending',
+            attempts: 0,
+            nextAttemptAt: 0,
+            createdAt: item.createdAt || new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          store.put(newItem);
         }
       };
 

@@ -137,6 +137,7 @@ class RealtimeServiceClass {
       }
 
       this.activeUserId = userId;
+      console.log('[REALTIME SUBSCRIBING]', userId);
       const channelName = `realtime-user-sync-${userId}`;
       const channel = supabase.channel(channelName);
 
@@ -145,6 +146,11 @@ class RealtimeServiceClass {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'nodes', filter: `user_id=eq.${userId}` },
         async (payload) => {
+          console.log('[REALTIME RX]', {
+            table: 'nodes',
+            eventType: payload.eventType,
+            id: (payload.new as any)?.id || (payload.old as any)?.id,
+          });
           await this.handleNodeChange(userId, payload);
         }
       );
@@ -154,6 +160,11 @@ class RealtimeServiceClass {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'notes', filter: `user_id=eq.${userId}` },
         async (payload) => {
+          console.log('[REALTIME RX]', {
+            table: 'notes',
+            eventType: payload.eventType,
+            id: (payload.new as any)?.id || (payload.old as any)?.id,
+          });
           await this.handleNoteChange(userId, payload);
         }
       );
@@ -163,6 +174,11 @@ class RealtimeServiceClass {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'tags', filter: `user_id=eq.${userId}` },
         async (payload) => {
+          console.log('[REALTIME RX]', {
+            table: 'tags',
+            eventType: payload.eventType,
+            id: (payload.new as any)?.id || (payload.old as any)?.id,
+          });
           await this.handleTagChange(userId, payload);
         }
       );
@@ -172,6 +188,11 @@ class RealtimeServiceClass {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'note_tags', filter: `user_id=eq.${userId}` },
         async (payload) => {
+          console.log('[REALTIME RX]', {
+            table: 'note_tags',
+            eventType: payload.eventType,
+            id: (payload.new as any)?.id || (payload.old as any)?.id,
+          });
           await this.handleNoteTagChange(userId, payload);
         }
       );
@@ -181,6 +202,11 @@ class RealtimeServiceClass {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'note_links', filter: `user_id=eq.${userId}` },
         async (payload) => {
+          console.log('[REALTIME RX]', {
+            table: 'note_links',
+            eventType: payload.eventType,
+            id: (payload.new as any)?.id || (payload.old as any)?.id,
+          });
           await this.handleNoteLinkChange(userId, payload);
         }
       );
@@ -190,15 +216,24 @@ class RealtimeServiceClass {
         'postgres_changes',
         { event: '*', schema: 'public', table: 'attachments', filter: `user_id=eq.${userId}` },
         async (payload) => {
+          console.log('[REALTIME RX]', {
+            table: 'attachments',
+            eventType: payload.eventType,
+            id: (payload.new as any)?.id || (payload.old as any)?.id,
+          });
           await this.handleAttachmentChange(userId, payload);
         }
       );
 
       channel.subscribe((status) => {
         if (status === 'SUBSCRIBED') {
-          console.info('[RealtimeService] Assinatura ativa para o usuário:', userId);
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
-          console.warn('[RealtimeService] Estado da assinatura realtime:', status);
+          console.log('[REALTIME SUBSCRIBED]', userId);
+        } else if (status === 'CHANNEL_ERROR') {
+          console.log('[REALTIME CHANNEL ERROR]', status);
+        } else if (status === 'TIMED_OUT') {
+          console.log('[REALTIME TIMEOUT]', status);
+        } else {
+          console.log('[REALTIME STATUS]', status);
         }
       });
 

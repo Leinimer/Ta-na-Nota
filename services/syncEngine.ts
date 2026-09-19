@@ -25,7 +25,6 @@ class SyncEngineClass {
   // Controle de concorrência por nodeId para garantir serialização de requisições de uma mesma nota e nó
   private inFlightNotes = new Set<string>();
   private inFlightNodes = new Set<string>();
-  private pendingNodeSaves = new Map<string, TreeNode>();
 
   // Cache de usuário autenticado para evitar chamadas de rede no caminho de UI
   private cachedUserId: string | null = null;
@@ -184,8 +183,9 @@ class SyncEngineClass {
 
   /**
    * Sincroniza um registro na tabela `nodes` do Supabase de forma idempotente (upsert).
-   * Evita chamadas repetidas caso o nó não tenha sofrido alterações recentes.
-   * Possui controle de concorrência por nodeId para evitar corridas locais vs remotas.
+   * - Realiza verificação estrita de erros e confirmação de resposta antes do sucesso.
+   * - Resolve conflitos comparando timestamps (Last Write Wins).
+   * - Possui controle de concorrência por nodeId para evitar corridas locais vs remotas.
    */
   async syncNode(node: TreeNode, maxRetries: number = 2): Promise<boolean> {
     const supabase = getSupabase();
@@ -199,29 +199,93 @@ class SyncEngineClass {
     const authUserId = await this.getAuthenticatedUserId();
     if (!authUserId) return false;
 
-    // Se já houver sincronização em voo deste nó, enfileira a versão mais recente em pendingNodeSaves
+    // Se já houver sincronização em voo deste nó, retorna false para mantê-lo pendente na fila
     if (this.inFlightNodes.has(node.id)) {
-      const existingPending = this.pendingNodeSaves.get(node.id);
-      if (!existingPending || new Date(node.updatedAt).getTime() >= new Date(existingPending.updatedAt).getTime()) {
-        this.pendingNodeSaves.set(node.id, node);
-      }
-      return true;
-    }
-
-    // Evita enviar se não mudou desde o último envio
-    const lastTime = this.lastSyncedNodeTime.get(node.id);
-    if (lastTime && lastTime === node.updatedAt && !node.deletedAt) {
-      return true;
+      return false;
     }
 
     this.inFlightNodes.add(node.id);
-    console.log('[NODE SYNC START]', { nodeId: node.id, name: node.name, updatedAt: node.updatedAt });
+    const localUpdatedAt = node.updatedAt || new Date().toISOString();
+    console.log('[SYNC START]', {
+      entityType: 'node',
+      entityId: node.id,
+      name: node.name,
+      updatedAt: localUpdatedAt,
+      isDeleted: Boolean(node.deletedAt),
+    });
 
     let syncedSuccessfully = false;
 
     try {
       const canonicalId = toCanonicalUuid(node.id);
       const canonicalParentId = node.parentId ? toCanonicalUuid(node.parentId) : null;
+      const localTime = new Date(localUpdatedAt).getTime();
+
+      // 1. Verificação prévia de conflito comparando timestamps com o nó remoto existente
+      try {
+        const { data: remoteNode, error: checkError } = await supabase
+          .from('nodes')
+          .select('id, updated_at, deleted_at, name, position, parent_id, type')
+          .eq('id', canonicalId)
+          .maybeSingle();
+
+        if (!checkError && remoteNode && remoteNode.updated_at) {
+          const remoteTime = new Date(remoteNode.updated_at).getTime();
+
+          if (remoteTime > localTime) {
+            // Conflito detectado: o registro remoto é mais recente que a versão local
+            console.log('[SYNC CONFLICT]', {
+              entityType: 'node',
+              entityId: node.id,
+              localTime,
+              remoteTime,
+              winner: 'remote',
+              reason: 'Remote node timestamp is strictly newer',
+            });
+
+            // Converge o estado local para o remoto soberano
+            const convergedNode: TreeNode = {
+              id: node.id,
+              userId: authUserId,
+              parentId: remoteNode.parent_id,
+              type: remoteNode.type || node.type,
+              name: remoteNode.name || node.name,
+              position: Number(remoteNode.position ?? node.position),
+              createdAt: node.createdAt,
+              updatedAt: remoteNode.updated_at,
+              deletedAt: remoteNode.deleted_at || undefined,
+            };
+
+            await indexedDbService.saveNode(convergedNode);
+            this.lastSyncedNodeTime.set(node.id, remoteNode.updated_at);
+            realtimeService.registerLocalNodeUpdate(node.id, remoteNode.updated_at, true);
+            realtimeService.notifyListeners({
+              type: 'node',
+              eventType: remoteNode.deleted_at ? 'DELETE' : 'UPDATE',
+              node: convergedNode,
+              nodeId: node.id,
+            });
+
+            console.log('[SYNC SUCCESS]', {
+              entityType: 'node',
+              entityId: node.id,
+              status: 'converged_to_remote_winner',
+            });
+            return true;
+          } else if (remoteTime < localTime) {
+            console.log('[SYNC CONFLICT]', {
+              entityType: 'node',
+              entityId: node.id,
+              localTime,
+              remoteTime,
+              winner: 'local',
+              reason: 'Local node timestamp is newer or equal',
+            });
+          }
+        }
+      } catch (conflictCheckErr) {
+        console.warn('[SyncEngine] Falha não bloqueante na checagem de conflito do node:', conflictCheckErr);
+      }
 
       const payload = {
         id: canonicalId,
@@ -230,7 +294,7 @@ class SyncEngineClass {
         type: node.type,
         name: node.name || (node.type === 'folder' ? 'Nova pasta' : 'Sem título'),
         position: Number(node.position || 1000),
-        updated_at: node.updatedAt || new Date().toISOString(),
+        updated_at: localUpdatedAt,
         deleted_at: node.deletedAt || null,
       };
 
@@ -238,16 +302,39 @@ class SyncEngineClass {
       while (attempt < maxRetries) {
         attempt++;
         try {
-          const { error } = await supabase.from('nodes').upsert(payload, { onConflict: 'id' });
-          if (!error) {
-            this.lastSyncedNodeTime.set(node.id, node.updatedAt);
-            console.log('[NODE SYNC DONE]', { nodeId: node.id, name: node.name, updatedAt: node.updatedAt });
+          const { data, error } = await supabase
+            .from('nodes')
+            .upsert(payload, { onConflict: 'id' })
+            .select('id, updated_at, deleted_at')
+            .single();
+
+          // Verificação estrita de resultado: erro nulo e retorno de ID correspondente
+          if (!error && data && data.id === canonicalId) {
+            this.lastSyncedNodeTime.set(node.id, data.updated_at || localUpdatedAt);
+            console.log('[SYNC SUCCESS]', {
+              entityType: 'node',
+              entityId: node.id,
+              updatedAt: data.updated_at,
+            });
             syncedSuccessfully = true;
             break;
           }
-          console.warn(`[SyncEngine] Erro ao sincronizar node (${attempt}/${maxRetries}):`, error.message);
-        } catch (err) {
-          console.warn(`[SyncEngine] Exceção no syncNode (${attempt}/${maxRetries}):`, err);
+
+          console.error('[SYNC FAILED]', {
+            entityType: 'node',
+            entityId: node.id,
+            attempt,
+            maxRetries,
+            error: error || 'Database returned empty response on node upsert',
+          });
+        } catch (err: any) {
+          console.error('[SYNC FAILED]', {
+            entityType: 'node',
+            entityId: node.id,
+            attempt,
+            maxRetries,
+            error: err?.message || err,
+          });
         }
 
         if (attempt < maxRetries) {
@@ -256,15 +343,6 @@ class SyncEngineClass {
       }
     } finally {
       this.inFlightNodes.delete(node.id);
-
-      // Se enquanto este sync estava em voo chegou uma versão mais recente deste node, processa ela
-      const nextPending = this.pendingNodeSaves.get(node.id);
-      if (nextPending) {
-        this.pendingNodeSaves.delete(node.id);
-        this.syncNode(nextPending).catch((err) => {
-          console.warn('[SyncEngine] Falha ao processar pending node sync:', err);
-        });
-      }
     }
 
     return syncedSuccessfully;
@@ -308,8 +386,9 @@ class SyncEngineClass {
   }
 
   /**
-   * Envia uma nota para o Supabase com controle de concorrência Last Write Wins (LWW).
-   * Tenta usar a RPC `save_note_versioned` para atomicidade; se indisponível, faz upsert seguro.
+   * Envia uma nota para o Supabase com controle estrito de concorrência e comparação de timestamps.
+   * Tenta usar a RPC `save_note_versioned` para atomicidade; se indisponível, faz upsert com
+   * verificação estrita de resposta e resolução de conflito por timestamp.
    */
   async syncNote(note: NoteRecord, node?: TreeNode): Promise<boolean> {
     const supabase = getSupabase();
@@ -323,9 +402,20 @@ class SyncEngineClass {
     const authUserId = await this.getAuthenticatedUserId();
     if (!authUserId) return false;
 
-    // 1. Garante que o node pai exista no Supabase antes da nota para satisfazer FK
+    console.log('[SYNC START]', {
+      entityType: 'note',
+      entityId: note.id,
+      nodeId: note.nodeId,
+      version: note.version,
+      updatedAt: note.updatedAt,
+    });
+
+    // 1. Garante que o node pai exista no Supabase antes da nota para satisfazer a chave estrangeira (FK)
     if (node) {
-      await this.syncNode(node);
+      const nodeSynced = await this.syncNode(node);
+      if (!nodeSynced && !node.deletedAt) {
+        console.warn('[SyncEngine] Node pai não pôde ser sincronizado antes da nota. Tentando prosseguir.');
+      }
     } else {
       const localNode = await indexedDbService.getNode(note.nodeId);
       if (localNode) {
@@ -343,8 +433,9 @@ class SyncEngineClass {
     const canonicalNodeId = toCanonicalUuid(note.nodeId);
     const versionNum = Math.max(1, Number(note.version || 1));
     const updatedAtIso = note.updatedAt || new Date().toISOString();
+    const localTime = new Date(updatedAtIso).getTime();
 
-    // 3. Execução prioritária via RPC como caminho principal com atomicidade no banco
+    // 3. Execução prioritária via RPC como caminho principal com atomicidade no PostgreSQL
     try {
       const { data: rpcData, error: rpcError } = await supabase.rpc('save_note_versioned', {
         p_id: canonicalNoteId,
@@ -358,53 +449,121 @@ class SyncEngineClass {
       });
 
       if (!rpcError && rpcData) {
+        // Status OK: operação atômica confirmada no banco
+        if (rpcData.status === 'ok') {
+          console.log('[SYNC SUCCESS]', {
+            entityType: 'note',
+            entityId: note.id,
+            version: versionNum,
+            method: 'rpc',
+          });
+          return true;
+        }
+
+        // Status rejected_stale: conflito de versão detectado. Resolve comparando timestamps.
         if (rpcData.status === 'rejected_stale') {
-          console.info('[SyncEngine LWW] Versão remota mais nova rejeitou atualização obsoleta. Convergindo local.');
           const remoteRow = rpcData.note;
           if (remoteRow) {
-            let parsedEditorContent = remoteRow.editor_content;
-            if (typeof parsedEditorContent === 'string') {
-              try {
-                parsedEditorContent = JSON.parse(parsedEditorContent);
-              } catch {
-                parsedEditorContent = null;
+            const remoteTime = new Date(remoteRow.updated_at || remoteRow.created_at || 0).getTime();
+
+            if (remoteTime > localTime) {
+              // Remote é mais novo por timestamp: Remote vence
+              console.log('[SYNC CONFLICT]', {
+                entityType: 'note',
+                entityId: note.id,
+                localTime,
+                remoteTime,
+                winner: 'remote',
+                reason: 'Remote note timestamp is strictly newer',
+                method: 'rpc',
+              });
+
+              let parsedEditorContent = remoteRow.editor_content;
+              if (typeof parsedEditorContent === 'string') {
+                try {
+                  parsedEditorContent = JSON.parse(parsedEditorContent);
+                } catch {
+                  parsedEditorContent = null;
+                }
               }
-            }
-            if (
-              !parsedEditorContent ||
-              typeof parsedEditorContent !== 'object' ||
-              !Array.isArray(parsedEditorContent.content)
-            ) {
-              parsedEditorContent = MarkdownService.markdownToVisual(
-                remoteRow.markdown_content || '',
-                'Nota'
-              );
-            }
+              if (
+                !parsedEditorContent ||
+                typeof parsedEditorContent !== 'object' ||
+                !Array.isArray(parsedEditorContent.content)
+              ) {
+                parsedEditorContent = MarkdownService.markdownToVisual(
+                  remoteRow.markdown_content || '',
+                  'Nota'
+                );
+              }
 
-            const converged: NoteRecord = {
-              id: remoteRow.id,
-              nodeId: remoteRow.node_id,
-              userId: remoteRow.user_id,
-              markdownContent: remoteRow.markdown_content || '',
-              editorContent: parsedEditorContent,
-              isFavorite: Boolean(remoteRow.is_favorite),
-              lastOpenedAt: remoteRow.last_opened_at,
-              version: Number(remoteRow.version || 1),
-              createdAt: remoteRow.created_at,
-              updatedAt: remoteRow.updated_at,
-            };
-            await indexedDbService.saveNote(converged);
+              const converged: NoteRecord = {
+                id: remoteRow.id,
+                nodeId: remoteRow.node_id,
+                userId: remoteRow.user_id,
+                markdownContent: remoteRow.markdown_content || '',
+                editorContent: parsedEditorContent,
+                isFavorite: Boolean(remoteRow.is_favorite),
+                lastOpenedAt: remoteRow.last_opened_at,
+                version: Number(remoteRow.version || 1),
+                createdAt: remoteRow.created_at,
+                updatedAt: remoteRow.updated_at,
+              };
+              await indexedDbService.saveNote(converged);
 
-            // Notifica listeners locais para atualizar a nota aberta no editor
-            realtimeService.notifyListeners({
-              type: 'note',
-              eventType: 'UPDATE',
-              note: converged,
-              nodeId: converged.nodeId,
-            });
+              // Notifica listeners locais para atualizar o editor e lista
+              realtimeService.notifyListeners({
+                type: 'note',
+                eventType: 'UPDATE',
+                note: converged,
+                nodeId: converged.nodeId,
+              });
+
+              console.log('[SYNC SUCCESS]', {
+                entityType: 'note',
+                entityId: note.id,
+                status: 'converged_to_remote_winner',
+              });
+              return true;
+            } else {
+              // Local é mais novo ou igual por timestamp: Local é SOBERANO!
+              console.log('[SYNC CONFLICT]', {
+                entityType: 'note',
+                entityId: note.id,
+                localTime,
+                remoteTime,
+                winner: 'local',
+                reason: 'Local note timestamp is newer or equal; bumping version to supersede remote',
+                method: 'rpc',
+              });
+
+              const bumpedVersion = Math.max(Number(remoteRow.version || 0), versionNum) + 1;
+              const bumpedNote: NoteRecord = {
+                ...note,
+                version: bumpedVersion,
+                updatedAt: new Date().toISOString(),
+              };
+              await indexedDbService.saveNote(bumpedNote);
+
+              // Re-executa com versão incrementada para vencer a corrida no banco
+              return await this.syncNote(bumpedNote, node);
+            }
           }
+
+          console.log('[SYNC SUCCESS]', {
+            entityType: 'note',
+            entityId: note.id,
+            status: 'rejected_stale_without_remote_row',
+          });
+          return true;
         }
-        return true;
+
+        console.error('[SYNC FAILED]', {
+          entityType: 'note',
+          entityId: note.id,
+          error: `RPC returned unhandled status: ${rpcData.status}`,
+        });
+        return false;
       }
 
       if (rpcError) {
@@ -416,26 +575,124 @@ class SyncEngineClass {
           rpcError.details?.toLowerCase().includes('does not exist');
 
         if (!isFunctionNotFound) {
-          // Erro de autorização, constraint, RLS, parâmetros inválidos, etc.
-          // NUNCA contornar a proteção de concorrência com upsert cego!
-          console.error(
-            `[SyncEngine] Erro na RPC save_note_versioned (código: ${rpcError.code}):`,
-            rpcError.message
-          );
+          console.error('[SYNC FAILED]', {
+            entityType: 'note',
+            entityId: note.id,
+            error: rpcError,
+            method: 'rpc',
+          });
           return false;
         }
 
         console.warn(
-          '[SyncEngine] RPC save_note_versioned não encontrada no banco (código 42883). Usando fallback seguro.'
+          '[SyncEngine] RPC save_note_versioned não encontrada no banco (código 42883). Usando fallback seguro com verificação estrita.'
         );
       }
-    } catch (err) {
-      console.warn('[SyncEngine] Exceção ao chamar save_note_versioned:', err);
+    } catch (err: any) {
+      console.error('[SYNC FAILED]', {
+        entityType: 'note',
+        entityId: note.id,
+        error: err?.message || err,
+        method: 'rpc',
+      });
       return false;
     }
 
-    // 4. Fallback: upsert direto SOMENTE se a RPC não existir no banco
+    // 4. Fallback com verificação estrita e resolução de conflito por timestamp
     try {
+      // 4.1 Consulta nota remota existente para detectar conflito por timestamp
+      const { data: existingRemote, error: fetchErr } = await supabase
+        .from('notes')
+        .select('id, node_id, user_id, markdown_content, editor_content, is_favorite, last_opened_at, version, created_at, updated_at')
+        .eq('node_id', canonicalNodeId)
+        .maybeSingle();
+
+      if (fetchErr) {
+        console.error('[SYNC FAILED]', {
+          entityType: 'note',
+          entityId: note.id,
+          error: fetchErr,
+          method: 'fallback_fetch',
+        });
+        return false;
+      }
+
+      let finalVersion = versionNum;
+
+      if (existingRemote && existingRemote.updated_at) {
+        const remoteTime = new Date(existingRemote.updated_at).getTime();
+
+        if (remoteTime > localTime) {
+          console.log('[SYNC CONFLICT]', {
+            entityType: 'note',
+            entityId: note.id,
+            localTime,
+            remoteTime,
+            winner: 'remote',
+            reason: 'Remote note timestamp is strictly newer',
+            method: 'fallback',
+          });
+
+          let parsedEditorContent = existingRemote.editor_content;
+          if (typeof parsedEditorContent === 'string') {
+            try {
+              parsedEditorContent = JSON.parse(parsedEditorContent);
+            } catch {
+              parsedEditorContent = null;
+            }
+          }
+          if (
+            !parsedEditorContent ||
+            typeof parsedEditorContent !== 'object' ||
+            !Array.isArray(parsedEditorContent.content)
+          ) {
+            parsedEditorContent = MarkdownService.markdownToVisual(
+              existingRemote.markdown_content || '',
+              'Nota'
+            );
+          }
+
+          const converged: NoteRecord = {
+            id: existingRemote.id,
+            nodeId: existingRemote.node_id,
+            userId: existingRemote.user_id,
+            markdownContent: existingRemote.markdown_content || '',
+            editorContent: parsedEditorContent,
+            isFavorite: Boolean(existingRemote.is_favorite),
+            lastOpenedAt: existingRemote.last_opened_at,
+            version: Number(existingRemote.version || 1),
+            createdAt: existingRemote.created_at,
+            updatedAt: existingRemote.updated_at,
+          };
+          await indexedDbService.saveNote(converged);
+          realtimeService.notifyListeners({
+            type: 'note',
+            eventType: 'UPDATE',
+            note: converged,
+            nodeId: converged.nodeId,
+          });
+
+          console.log('[SYNC SUCCESS]', {
+            entityType: 'note',
+            entityId: note.id,
+            status: 'converged_to_remote_winner',
+            method: 'fallback',
+          });
+          return true;
+        } else {
+          console.log('[SYNC CONFLICT]', {
+            entityType: 'note',
+            entityId: note.id,
+            localTime,
+            remoteTime,
+            winner: 'local',
+            reason: 'Local note timestamp is newer or equal',
+            method: 'fallback',
+          });
+          finalVersion = Math.max(Number(existingRemote.version || 0) + 1, versionNum);
+        }
+      }
+
       const payload = {
         id: canonicalNoteId,
         node_id: canonicalNodeId,
@@ -444,18 +701,41 @@ class SyncEngineClass {
         editor_content: editor,
         is_favorite: Boolean(note.isFavorite),
         last_opened_at: note.lastOpenedAt ?? null,
-        version: versionNum,
+        version: finalVersion,
         updated_at: updatedAtIso,
       };
 
-      const { error } = await supabase.from('notes').upsert(payload, { onConflict: 'node_id' });
-      if (!error) {
+      const { data: upsertData, error: upsertErr } = await supabase
+        .from('notes')
+        .upsert(payload, { onConflict: 'node_id' })
+        .select('id, node_id, version, updated_at')
+        .single();
+
+      // Verificação estrita dos dados retornados
+      if (!upsertErr && upsertData && upsertData.node_id === canonicalNodeId) {
+        console.log('[SYNC SUCCESS]', {
+          entityType: 'note',
+          entityId: note.id,
+          version: upsertData.version,
+          method: 'fallback_upsert',
+        });
         return true;
       }
-      console.warn('[SyncEngine] Erro no fallback upsert de note:', error.message);
+
+      console.error('[SYNC FAILED]', {
+        entityType: 'note',
+        entityId: note.id,
+        error: upsertErr || 'Database returned empty response on note fallback upsert',
+        method: 'fallback_upsert',
+      });
       return false;
-    } catch (err) {
-      console.warn('[SyncEngine] Exceção no syncNote:', err);
+    } catch (err: any) {
+      console.error('[SYNC FAILED]', {
+        entityType: 'note',
+        entityId: note.id,
+        error: err?.message || err,
+        method: 'fallback_exception',
+      });
       return false;
     }
   }
@@ -466,14 +746,13 @@ class SyncEngineClass {
    */
   async enqueueNoteSave(note: NoteRecord, node?: TreeNode): Promise<void> {
     const userId = note.userId;
-    const key = note.nodeId;
 
     // 1. Persiste na fila durável do IndexedDB com coalescing automático
     const queueItem: SyncQueueItem = {
       id: `sync_note_${note.id}`,
       userId,
       entityType: 'note',
-      entityId: key,
+      entityId: note.id,
       operation: 'upsert',
       payload: { note, node },
       version: Number(note.version || 1),
@@ -512,13 +791,14 @@ class SyncEngineClass {
   }
 
   /**
-   * Processador da fila persistente do IndexedDB.
+   * Processador robusto da fila persistente do IndexedDB.
    * Garante:
    * - Apenas um processamento ativo por vez.
-   * - Serialização por nota (sem requisições concorrentes da mesma nota).
+   * - A versão mais recente no IndexedDB é tratada como SOBERANA (nunca envia dados obsoletos se edições mais novas existirem).
+   * - Todas as operações no banco são estritamente verificadas ANTES de remover qualquer item da fila.
    * - Remoção segura de itens processados com verificação atômica de versão (completeSyncItem).
    * - Backoff exponencial para erros temporários.
-   * - Convergência garantida: se novas versões entrarem durante o envio, elas continuam na fila e são enviadas.
+   * - Convergência garantida: novas edições durante o envio permanecem na fila e são enviadas na próxima rodada.
    * - Atualização precisa do status da UI ('saving' -> 'saved' / 'offline' / 'error').
    */
   async processPersistentQueue(): Promise<void> {
@@ -539,6 +819,11 @@ class SyncEngineClass {
           hasPendingWork = false;
           break;
         }
+
+        console.log('[QUEUE PROCESSING]', {
+          userId: authUserId,
+          pendingCount: pendingItems.length,
+        });
 
         let processedAnyItem = false;
 
@@ -561,99 +846,166 @@ class SyncEngineClass {
 
           try {
             let success = false;
+            let targetVersionToClear = item.version;
 
             if (item.entityType === 'note') {
-              const { note, node } = item.payload || {};
-              if (note) {
-                success = await this.syncNote(note, node);
+              // 1. Respeita a versão mais recente como soberana: busca o estado atual no IndexedDB
+              const sovereignNote = await indexedDbService.getNote(item.entityId);
+              let noteToSync = item.payload?.note as NoteRecord | undefined;
+              const parentNode = item.payload?.node as TreeNode | undefined;
+
+              if (sovereignNote) {
+                const sovereignVersion = Number(sovereignNote.version || 1);
+                const queueVersion = Number(noteToSync?.version || 1);
+                const sovereignTime = new Date(sovereignNote.updatedAt || 0).getTime();
+                const queueTime = new Date(noteToSync?.updatedAt || 0).getTime();
+
+                if (sovereignVersion > queueVersion || (sovereignVersion === queueVersion && sovereignTime > queueTime)) {
+                  console.log('[QUEUE SOVEREIGN REFRESH]', {
+                    entityType: 'note',
+                    entityId: item.entityId,
+                    queueVersion,
+                    sovereignVersion,
+                    queueTime,
+                    sovereignTime,
+                    action: 'Promoting latest local IndexedDB note to sovereign sync target',
+                  });
+                  noteToSync = sovereignNote;
+                  targetVersionToClear = sovereignVersion;
+                } else if (noteToSync) {
+                  targetVersionToClear = queueVersion;
+                }
+              }
+
+              if (noteToSync) {
+                success = await this.syncNote(noteToSync, parentNode);
               } else {
-                success = true; // Payload inválido, remove para não travar
+                console.warn('[QUEUE DISCARD INVALID]', { entityType: 'note', itemId: item.id });
+                success = true; // Payload vazio ou inválido, limpa da fila
               }
             } else if (item.entityType === 'node') {
-              const node = item.payload as TreeNode;
-              if (node) {
-                // 1. Verifica se ainda é a versão local mais recente no IndexedDB
-                const currentLocalNode = await indexedDbService.getNode(item.entityId);
-                if (currentLocalNode && currentLocalNode.updatedAt) {
-                  const localTime = new Date(currentLocalNode.updatedAt).getTime();
-                  const itemTime = new Date(node.updatedAt || 0).getTime();
-                  if (localTime > itemTime) {
-                    console.log('[NODE QUEUE DISCARD STALE VERSION]', {
-                      nodeId: item.entityId,
-                      queueVersion: itemTime,
-                      localVersion: localTime,
-                    });
-                    // Descarta versão antiga já superada localmente
-                    await indexedDbService.completeSyncItem(item.id, item.version);
-                    continue;
-                  }
+              // 1. Respeita a versão mais recente do node como soberana
+              const sovereignNode = await indexedDbService.getNode(item.entityId);
+              let nodeToSync = item.payload as TreeNode | undefined;
+
+              if (sovereignNode && sovereignNode.updatedAt) {
+                const sovereignTime = new Date(sovereignNode.updatedAt).getTime();
+                const queueTime = new Date(nodeToSync?.updatedAt || 0).getTime();
+
+                if (sovereignTime > queueTime) {
+                  console.log('[QUEUE SOVEREIGN REFRESH]', {
+                    entityType: 'node',
+                    entityId: item.entityId,
+                    queueTime,
+                    sovereignTime,
+                    action: 'Promoting latest local IndexedDB node to sovereign sync target',
+                  });
+                  nodeToSync = sovereignNode;
+                  targetVersionToClear = sovereignTime;
+                } else if (nodeToSync) {
+                  targetVersionToClear = queueTime;
                 }
-                success = await this.syncNode(node);
+              }
+
+              if (nodeToSync) {
+                success = await this.syncNode(nodeToSync);
                 if (success) {
-                  realtimeService.clearPendingLocalNodeUpdate(node.id, node.updatedAt);
+                  realtimeService.clearPendingLocalNodeUpdate(nodeToSync.id, nodeToSync.updatedAt);
                 }
               } else {
+                console.warn('[QUEUE DISCARD INVALID]', { entityType: 'node', itemId: item.id });
                 success = true;
               }
             } else if (item.entityType === 'tag') {
               const tag = item.payload;
               if (tag) {
-                await this.syncTag(tag);
-                success = true;
+                success = await this.syncTag(tag);
               } else {
                 success = true;
               }
             } else if (item.entityType === 'note_tags') {
               const { noteId, tagIds } = item.payload || {};
               if (noteId && tagIds) {
-                await this.syncNoteTags(authUserId, noteId, tagIds);
-                success = true;
+                success = await this.syncNoteTags(authUserId, noteId, tagIds);
               } else {
                 success = true;
               }
             } else if (item.entityType === 'note_links') {
               const { sourceNoteId, targetNoteIds } = item.payload || {};
               if (sourceNoteId && targetNoteIds) {
-                await this.syncNoteLinks(authUserId, sourceNoteId, targetNoteIds);
-                success = true;
+                success = await this.syncNoteLinks(authUserId, sourceNoteId, targetNoteIds);
               } else {
                 success = true;
               }
             }
 
+            // CRÍTICO: SOMENTE limpa da fila se a operação foi VERIFICADA com sucesso no Supabase!
             if (success) {
-              // Remoção atômica e segura por versão:
-              // Se novas edições foram enfileiradas com versão mais recente enquanto o sync
-              // estava em voo, completeSyncItem NÃO deleta e a versão mais nova permanece na fila.
-              const targetVersion =
-                item.entityType === 'note' && item.payload?.note?.version
-                  ? Number(item.payload.note.version)
-                  : item.version;
+              const { removed, currentVersion } = await indexedDbService.completeSyncItem(
+                item.id,
+                targetVersionToClear
+              );
 
-              await indexedDbService.completeSyncItem(item.id, targetVersion);
+              if (removed) {
+                console.log('[QUEUE ITEM COMPLETE]', {
+                  itemId: item.id,
+                  entityType: item.entityType,
+                  entityId: item.entityId,
+                  version: targetVersionToClear,
+                });
+              } else {
+                console.log('[QUEUE ITEM RETAINED]', {
+                  itemId: item.id,
+                  entityType: item.entityType,
+                  entityId: item.entityId,
+                  processedVersion: targetVersionToClear,
+                  sovereignQueueVersion: currentVersion,
+                  reason: 'Newer sovereign version arrived in queue during sync operation',
+                });
+              }
             } else {
+              // Se a operação falhou na verificação do banco, NÃO remove da fila!
               const attempts = (item.attempts || 0) + 1;
               const backoffMs = Math.min(60000, 1000 * Math.pow(2, attempts));
+              const errorMsg = 'Falha de verificação na operação com Supabase';
+
+              console.warn('[QUEUE ITEM RETRY]', {
+                itemId: item.id,
+                entityType: item.entityType,
+                entityId: item.entityId,
+                attempt: attempts,
+                backoffMs,
+                error: errorMsg,
+              });
+
               await indexedDbService.updateSyncItem({
                 ...item,
                 attempts,
                 nextAttemptAt: Date.now() + backoffMs,
                 status: attempts >= 5 ? 'failed' : 'pending',
-                lastError: 'Falha temporária de sincronização',
+                lastError: errorMsg,
               });
+
               if (attempts >= 5) {
                 this.emitStatus('error');
               }
             }
           } catch (err: any) {
-            console.warn('[SyncEngine] Exceção ao processar item da fila:', err);
+            console.error('[QUEUE ITEM EXCEPTION]', {
+              itemId: item.id,
+              entityType: item.entityType,
+              entityId: item.entityId,
+              error: err?.message || err,
+            });
+
             const attempts = (item.attempts || 0) + 1;
+            const backoffMs = Math.min(60000, 1000 * Math.pow(2, attempts));
             await indexedDbService.updateSyncItem({
               ...item,
               attempts,
-              nextAttemptAt: Date.now() + 3000,
+              nextAttemptAt: Date.now() + backoffMs,
               status: attempts >= 5 ? 'failed' : 'pending',
-              lastError: err?.message || 'Erro desconhecido',
+              lastError: err?.message || 'Erro de execução na sincronização',
             });
             this.emitStatus('error');
           } finally {
@@ -684,9 +1036,7 @@ class SyncEngineClass {
         if (remainingCount === 0) {
           this.emitStatus('saved');
         } else {
-          // Se ainda há pendências (ex: versão mais nova adicionada nos últimos milissegundos),
-          // agenda a próxima execução
-          this.triggerQueueProcessing(80);
+          this.triggerQueueProcessing(150);
         }
       }
     } finally {
@@ -695,54 +1045,91 @@ class SyncEngineClass {
   }
 
   /**
-   * Sincroniza uma tag no Supabase.
+   * Sincroniza uma tag no Supabase com verificação estrita de resposta.
    */
-  async syncTag(tag: TagRecord): Promise<void> {
+  async syncTag(tag: TagRecord): Promise<boolean> {
     const supabase = getSupabase();
-    if (!supabase || !isSupabaseConfigured || !this.isOnline) return;
+    if (!supabase || !isSupabaseConfigured || !this.isOnline) return false;
 
     const authUserId = await this.getAuthenticatedUserId();
-    if (!authUserId) return;
+    if (!authUserId) return false;
+
+    const canonicalTagId = toCanonicalUuid(tag.id);
 
     try {
-      await supabase.from('tags').upsert(
-        {
-          id: toCanonicalUuid(tag.id),
-          user_id: authUserId,
-          name: tag.name,
-          normalized_name: tag.normalizedName,
-          created_at: tag.createdAt || new Date().toISOString(),
-        },
-        { onConflict: 'id' }
-      );
-    } catch (err) {
-      console.warn('[SyncEngine] Falha ao sincronizar tag:', err);
+      const { data, error } = await supabase
+        .from('tags')
+        .upsert(
+          {
+            id: canonicalTagId,
+            user_id: authUserId,
+            name: tag.name,
+            normalized_name: tag.normalizedName,
+            created_at: tag.createdAt || new Date().toISOString(),
+          },
+          { onConflict: 'id' }
+        )
+        .select('id, name')
+        .single();
+
+      if (!error && data && data.id === canonicalTagId) {
+        console.log('[SYNC SUCCESS]', { entityType: 'tag', entityId: tag.id });
+        return true;
+      }
+
+      console.error('[SYNC FAILED]', {
+        entityType: 'tag',
+        entityId: tag.id,
+        error: error || 'Verification failed: tag upsert returned empty response',
+      });
+      return false;
+    } catch (err: any) {
+      console.error('[SYNC FAILED]', {
+        entityType: 'tag',
+        entityId: tag.id,
+        error: err?.message || err,
+      });
+      return false;
     }
   }
 
   /**
    * Sincroniza relações note_tags no Supabase de forma estritamente DIFERENCIAL.
    * Se os IDs de tags da nota não mudaram em relação ao último envio, NÃO executa DELETE nem INSERT.
+   * Verifica estritamente que as operações no banco foram concluídas com sucesso.
    */
-  async syncNoteTags(userId: string, noteId: string, tagIds: string[]): Promise<void> {
+  async syncNoteTags(userId: string, noteId: string, tagIds: string[]): Promise<boolean> {
     const supabase = getSupabase();
-    if (!supabase || !isSupabaseConfigured || !this.isOnline) return;
+    if (!supabase || !isSupabaseConfigured || !this.isOnline) return false;
 
     const canonicalNoteId = toCanonicalUuid(noteId);
     const sortedTags = [...tagIds].map(toCanonicalUuid).sort().join(',');
 
     if (this.lastSyncedTags.get(canonicalNoteId) === sortedTags) {
-      return;
+      return true;
     }
 
     const authUserId = await this.getAuthenticatedUserId();
-    if (!authUserId) return;
+    if (!authUserId) return false;
 
     try {
-      // 1. Remove tags antigas
-      await supabase.from('note_tags').delete().eq('note_id', canonicalNoteId);
+      // 1. Remove tags antigas com verificação estrita de erro
+      const { error: delError } = await supabase
+        .from('note_tags')
+        .delete()
+        .eq('note_id', canonicalNoteId);
 
-      // 2. Insere novas tags
+      if (delError) {
+        console.error('[SYNC FAILED]', {
+          entityType: 'note_tags',
+          entityId: noteId,
+          operation: 'delete',
+          error: delError,
+        });
+        return false;
+      }
+
+      // 2. Insere novas tags com verificação estrita de resposta
       if (tagIds.length > 0) {
         const rows = tagIds.map((tId) => ({
           note_id: canonicalNoteId,
@@ -751,22 +1138,47 @@ class SyncEngineClass {
           created_at: new Date().toISOString(),
         }));
 
-        await supabase.from('note_tags').insert(rows);
+        const { data: insData, error: insError } = await supabase
+          .from('note_tags')
+          .insert(rows)
+          .select('note_id, tag_id');
+
+        if (insError || !insData || insData.length !== rows.length) {
+          console.error('[SYNC FAILED]', {
+            entityType: 'note_tags',
+            entityId: noteId,
+            operation: 'insert',
+            error: insError || 'Verification failed: inserted count mismatch',
+          });
+          return false;
+        }
       }
 
       this.lastSyncedTags.set(canonicalNoteId, sortedTags);
-    } catch (err) {
-      console.warn('[SyncEngine] Falha ao sincronizar note_tags:', err);
+      console.log('[SYNC SUCCESS]', {
+        entityType: 'note_tags',
+        entityId: noteId,
+        count: tagIds.length,
+      });
+      return true;
+    } catch (err: any) {
+      console.error('[SYNC FAILED]', {
+        entityType: 'note_tags',
+        entityId: noteId,
+        error: err?.message || err,
+      });
+      return false;
     }
   }
 
   /**
    * Sincroniza relações note_links (backlinks) no Supabase de forma estritamente DIFERENCIAL.
    * Se os targetNoteIds não mudaram em relação ao último envio, NÃO executa DELETE nem INSERT.
+   * Verifica estritamente que as operações no banco foram concluídas com sucesso.
    */
-  async syncNoteLinks(userId: string, sourceNoteId: string, targetNoteIds: string[]): Promise<void> {
+  async syncNoteLinks(userId: string, sourceNoteId: string, targetNoteIds: string[]): Promise<boolean> {
     const supabase = getSupabase();
-    if (!supabase || !isSupabaseConfigured || !this.isOnline) return;
+    if (!supabase || !isSupabaseConfigured || !this.isOnline) return false;
 
     const canonicalSourceId = toCanonicalUuid(sourceNoteId);
     const validTargets = targetNoteIds
@@ -775,19 +1187,33 @@ class SyncEngineClass {
     const sortedTargets = [...new Set(validTargets)].sort().join(',');
 
     if (this.lastSyncedLinks.get(canonicalSourceId) === sortedTargets) {
-      return;
+      return true;
     }
 
     const authUserId = await this.getAuthenticatedUserId();
-    if (!authUserId) return;
+    if (!authUserId) return false;
 
     try {
-      // 1. Remove links anteriores desta nota fonte
-      await supabase.from('note_links').delete().eq('source_note_id', canonicalSourceId);
+      // 1. Remove links anteriores desta nota fonte com verificação estrita
+      const { error: delError } = await supabase
+        .from('note_links')
+        .delete()
+        .eq('source_note_id', canonicalSourceId);
 
-      // 2. Insere novos links
+      if (delError) {
+        console.error('[SYNC FAILED]', {
+          entityType: 'note_links',
+          entityId: sourceNoteId,
+          operation: 'delete',
+          error: delError,
+        });
+        return false;
+      }
+
+      // 2. Insere novos links com verificação de resultado
       if (validTargets.length > 0) {
-        const rows = [...new Set(validTargets)].map((targetId) => ({
+        const uniqueTargets = [...new Set(validTargets)];
+        const rows = uniqueTargets.map((targetId) => ({
           id: crypto.randomUUID(),
           user_id: authUserId,
           source_note_id: canonicalSourceId,
@@ -795,17 +1221,78 @@ class SyncEngineClass {
           created_at: new Date().toISOString(),
         }));
 
-        await supabase.from('note_links').insert(rows);
+        const { data: insData, error: insError } = await supabase
+          .from('note_links')
+          .insert(rows)
+          .select('id');
+
+        if (insError || !insData || insData.length !== rows.length) {
+          console.error('[SYNC FAILED]', {
+            entityType: 'note_links',
+            entityId: sourceNoteId,
+            operation: 'insert',
+            error: insError || 'Verification failed: inserted link count mismatch',
+          });
+          return false;
+        }
       }
 
       this.lastSyncedLinks.set(canonicalSourceId, sortedTargets);
+      console.log('[SYNC SUCCESS]', {
+        entityType: 'note_links',
+        entityId: sourceNoteId,
+        count: validTargets.length,
+      });
+      return true;
+    } catch (err: any) {
+      console.error('[SYNC FAILED]', {
+        entityType: 'note_links',
+        entityId: sourceNoteId,
+        error: err?.message || err,
+      });
+      return false;
+    }
+  }
+
+  async debugRemoteSnapshot(userId: string): Promise<void> {
+    const supabase = getSupabase();
+    if (!supabase || !isSupabaseConfigured) return;
+    try {
+      const [{ count: nodeCount }, { count: noteCount }] = await Promise.all([
+        supabase.from('nodes').select('*', { count: 'exact', head: true }).eq('user_id', userId).is('deleted_at', null),
+        supabase.from('notes').select('*', { count: 'exact', head: true }).eq('user_id', userId),
+      ]);
+      console.log('[REMOTE SNAPSHOT]', {
+        userId,
+        remoteActiveNodes: nodeCount ?? 0,
+        remoteNotes: noteCount ?? 0,
+      });
     } catch (err) {
-      console.warn('[SyncEngine] Falha ao sincronizar note_links:', err);
+      console.warn('[SyncEngine] Erro no debugRemoteSnapshot:', err);
+    }
+  }
+
+  async debugLocalSnapshot(userId: string): Promise<void> {
+    try {
+      const [localNodes, localNotes, pendingCount] = await Promise.all([
+        indexedDbService.getAllNodes(userId),
+        indexedDbService.getAllNotes(userId),
+        indexedDbService.getPendingSyncCount(userId),
+      ]);
+      console.log('[LOCAL SNAPSHOT]', {
+        userId,
+        localActiveNodes: localNodes.length,
+        localNotes: localNotes.length,
+        pendingQueueItems: pendingCount,
+      });
+    } catch (err) {
+      console.warn('[SyncEngine] Erro no debugLocalSnapshot:', err);
     }
   }
 
   /**
    * Hidratação inicial do IndexedDB a partir do Supabase ao iniciar sessão.
+   * Respeita LWW com comparação estrita de timestamps e preserva tombstones.
    */
   async hydrateFromRemote(userId: string): Promise<boolean> {
     const supabase = getSupabase();
@@ -824,7 +1311,6 @@ class SyncEngineClass {
           .from('nodes')
           .select('id, user_id, parent_id, type, name, position, created_at, updated_at, deleted_at')
           .eq('user_id', authUserId)
-          .is('deleted_at', null)
           .order('position', { ascending: true }),
         supabase
           .from('notes')
@@ -844,24 +1330,63 @@ class SyncEngineClass {
           .eq('user_id', authUserId),
       ]);
 
+      if (nodesRes.error) throw nodesRes.error;
+      if (notesRes.error) throw notesRes.error;
+      if (tagsRes.error) throw tagsRes.error;
+      if (noteTagsRes.error) throw noteTagsRes.error;
+      if (linksRes.error) throw linksRes.error;
+
       const remoteNodes = nodesRes.data || [];
       const remoteNotes = notesRes.data || [];
       const remoteTags = tagsRes.data || [];
       const remoteNoteTags = noteTagsRes.data || [];
       const remoteLinks = linksRes.data || [];
 
-      // 1. Hidrata IndexedDB com os nós remotos
+      // 1. Hidrata IndexedDB com os nós remotos (incluindo tombstones)
       for (const d of remoteNodes) {
         const local = await indexedDbService.getNode(d.id);
+        const remoteTime = new Date(d.updated_at || d.created_at || 0).getTime();
+
+        if (d.deleted_at) {
+          if (local) {
+            const localTime = new Date(local.updatedAt || local.createdAt || 0).getTime();
+            if (!local.deletedAt && localTime > remoteTime) {
+              continue; // Local reativou ou modificou depois da exclusão remota
+            }
+            local.deletedAt = d.deleted_at;
+            local.updatedAt = d.updated_at || d.deleted_at;
+            await indexedDbService.saveNode(local);
+            realtimeService.registerLocalNodeUpdate(local.id, local.updatedAt, true);
+          } else {
+            const tombstone: TreeNode = {
+              id: d.id,
+              userId: d.user_id,
+              parentId: d.parent_id,
+              type: d.type,
+              name: d.name,
+              position: Number(d.position),
+              createdAt: d.created_at,
+              updatedAt: d.updated_at || d.deleted_at,
+              deletedAt: d.deleted_at,
+            };
+            await indexedDbService.saveNode(tombstone);
+            realtimeService.registerLocalNodeUpdate(d.id, tombstone.updatedAt, true);
+          }
+          continue;
+        }
+
+        // Registro remoto ativo
         if (local) {
           if (local.deletedAt) {
-            // Jamais ressuscita nó que foi excluído localmente com tombstone!
-            continue;
-          }
-          const localTime = new Date(local.updatedAt || local.createdAt || 0).getTime();
-          const remoteTime = new Date(d.updated_at || d.created_at || 0).getTime();
-          if (localTime >= remoteTime) {
-            continue;
+            const localDeletedTime = new Date(local.deletedAt).getTime();
+            if (localDeletedTime >= remoteTime) {
+              continue; // Preserva tombstone local
+            }
+          } else {
+            const localTime = new Date(local.updatedAt || local.createdAt || 0).getTime();
+            if (localTime >= remoteTime) {
+              continue; // Local é igual ou mais novo
+            }
           }
         }
 
@@ -880,14 +1405,41 @@ class SyncEngineClass {
         this.lastSyncedNodeTime.set(d.id, d.updated_at);
       }
 
-      // 2. Hidrata notas respeitando Last Write Wins (LWW)
+      // 2. Hidrata notas respeitando Last Write Wins (LWW) e comparação de timestamps
       for (const d of remoteNotes) {
         const local = await indexedDbService.getNote(d.id);
         const remoteVersion = Number(d.version || 1);
-        const localVersion = Number(local?.version || 0);
+        const remoteTime = new Date(d.updated_at || d.created_at || 0).getTime();
 
-        if (local && localVersion > remoteVersion) {
-          continue;
+        if (local) {
+          const localVersion = Number(local.version || 1);
+          const localTime = new Date(local.updatedAt || local.createdAt || 0).getTime();
+
+          if (localVersion > remoteVersion) {
+            continue;
+          }
+          if (localVersion === remoteVersion && localTime >= remoteTime) {
+            continue;
+          }
+        }
+
+        let parsedEditorContent = d.editor_content;
+        if (typeof parsedEditorContent === 'string') {
+          try {
+            parsedEditorContent = JSON.parse(parsedEditorContent);
+          } catch {
+            parsedEditorContent = null;
+          }
+        }
+        if (
+          !parsedEditorContent ||
+          typeof parsedEditorContent !== 'object' ||
+          !Array.isArray(parsedEditorContent.content)
+        ) {
+          parsedEditorContent = MarkdownService.markdownToVisual(
+            d.markdown_content || '',
+            'Nota'
+          );
         }
 
         const note: NoteRecord = {
@@ -895,7 +1447,7 @@ class SyncEngineClass {
           nodeId: d.node_id,
           userId: d.user_id,
           markdownContent: d.markdown_content || '',
-          editorContent: d.editor_content || null,
+          editorContent: parsedEditorContent,
           isFavorite: Boolean(d.is_favorite),
           lastOpenedAt: d.last_opened_at,
           version: remoteVersion,
@@ -941,18 +1493,18 @@ class SyncEngineClass {
         this.lastSyncedLinks.set(toCanonicalUuid(sId), [...targets].map(toCanonicalUuid).sort().join(','));
       }
 
-      // 6. Envia para o Supabase registros locais criados offline
-      const localNodes = await indexedDbService.getAllNodes(authUserId);
+      // 6. Envia para o Supabase registros locais criados offline (sem existência no remoto)
+      const allLocalNodes = await indexedDbService.getAllNodesRaw(authUserId);
       const remoteNodeIdSet = new Set(remoteNodes.map((rn: any) => rn.id));
-      for (const localNode of localNodes) {
+      for (const localNode of allLocalNodes) {
         if (!remoteNodeIdSet.has(localNode.id) && !localNode.deletedAt) {
           await this.syncNode(localNode);
         }
       }
 
-      const localNotes = await indexedDbService.getAllNotes(authUserId);
+      const allLocalNotes = await indexedDbService.getAllNotes(authUserId);
       const remoteNoteIdSet = new Set(remoteNotes.map((rn: any) => rn.id));
-      for (const localNote of localNotes) {
+      for (const localNote of allLocalNotes) {
         if (!remoteNoteIdSet.has(localNote.id)) {
           await this.syncNote(localNote);
         }
@@ -960,6 +1512,9 @@ class SyncEngineClass {
 
       // Processa itens que possam ter ficado pendentes na fila local
       await this.processPersistentQueue();
+
+      await this.debugRemoteSnapshot(authUserId);
+      await this.debugLocalSnapshot(authUserId);
 
       this.emitStatus('saved');
       console.info('[SyncEngine] Hidratação inicial concluída.');
