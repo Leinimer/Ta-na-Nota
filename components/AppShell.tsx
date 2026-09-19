@@ -82,13 +82,16 @@ function insertNodeIntoTree(nodes: TreeNode[], newNode: TreeNode): TreeNode[] {
   };
 
   if (!newNode.parentId) {
-    return [...nodes, nodeWithChildren].sort((a, b) => a.position - b.position);
+    return [...nodes.filter((n) => n.id !== newNode.id), nodeWithChildren].sort((a, b) => a.position - b.position);
   }
 
+  let inserted = false;
   function insertRecursive(list: TreeNode[]): TreeNode[] {
     return list.map((item) => {
       if (item.id === newNode.parentId) {
-        const children = [...(item.children || []), nodeWithChildren].sort((a, b) => a.position - b.position);
+        inserted = true;
+        const filteredChildren = (item.children || []).filter((c) => c.id !== newNode.id);
+        const children = [...filteredChildren, nodeWithChildren].sort((a, b) => a.position - b.position);
         return { ...item, children };
       }
       if (item.children && item.children.length > 0) {
@@ -98,7 +101,12 @@ function insertNodeIntoTree(nodes: TreeNode[], newNode: TreeNode): TreeNode[] {
     });
   }
 
-  return insertRecursive(nodes);
+  const result = insertRecursive(nodes);
+  if (!inserted) {
+    // Se o diretório pai não foi encontrado na árvore, coloca na raiz para que o nó nunca fique invisível
+    return [...nodes.filter((n) => n.id !== newNode.id), nodeWithChildren].sort((a, b) => a.position - b.position);
+  }
+  return result;
 }
 
 // Helper para atualizar nome de nó na árvore sem recarregar tudo do IndexedDB durante digitação
@@ -951,10 +959,16 @@ export function AppShell() {
         onUserChanged={async (user) => {
           setCurrentUser(user);
           if (user) {
+            syncEngine.setAuthenticatedUserId(user.id);
             await indexedDbService.migrateLegacyIds(user.id);
+            const tombstoneIds = await indexedDbService.getTombstoneNodeIds(user.id);
+            realtimeService.loadTombstoneIds(tombstoneIds);
             await syncEngine.hydrateFromRemote(user.id);
             await refreshAppData(user.id);
+            realtimeService.subscribe(user.id);
           } else {
+            syncEngine.setAuthenticatedUserId(null);
+            realtimeService.unsubscribe();
             setActiveNode(null);
             setActiveNote(null);
             setTree([]);

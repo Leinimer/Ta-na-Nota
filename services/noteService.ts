@@ -94,7 +94,9 @@ export const noteService = {
         updatedAt: now,
       };
       await indexedDbService.saveNote(note);
-      await syncEngine.syncNote(note);
+      syncEngine.enqueueNoteSave(note, node).catch((err) => {
+        console.warn('[noteService] Falha ao enfileirar nova nota:', err);
+      });
     }
 
     // Atualiza last_opened_at localmente
@@ -173,6 +175,11 @@ export const noteService = {
         nodeId: node.id,
         title: node.name,
         version: existing.version,
+      });
+
+      // Enfileira sincronização do nó atualizado (título) na fila durável
+      syncEngine.enqueueNode(node).catch((err) => {
+        console.warn('[noteService] Falha ao enfileirar nó atualizado:', err);
       });
     } else {
       await indexedDbService.saveNote(existing);

@@ -311,6 +311,15 @@ class SyncEngineClass {
           // Verificação estrita de resultado: erro nulo e retorno de ID correspondente
           if (!error && data && data.id === canonicalId) {
             this.lastSyncedNodeTime.set(node.id, data.updated_at || localUpdatedAt);
+            if (node.deletedAt) {
+              console.log('[REMOTE WRITE SUCCESS] DELETE', node.id);
+            } else {
+              console.log('[REMOTE WRITE SUCCESS] NODE', {
+                id: node.id,
+                name: node.name,
+                parentId: node.parentId,
+              });
+            }
             console.log('[SYNC SUCCESS]', {
               entityType: 'node',
               entityId: node.id,
@@ -411,15 +420,21 @@ class SyncEngineClass {
     });
 
     // 1. Garante que o node pai exista no Supabase antes da nota para satisfazer a chave estrangeira (FK)
+    let nodeSynced = false;
     if (node) {
-      const nodeSynced = await this.syncNode(node);
+      nodeSynced = await this.syncNode(node);
       if (!nodeSynced && !node.deletedAt) {
-        console.warn('[SyncEngine] Node pai não pôde ser sincronizado antes da nota. Tentando prosseguir.');
+        console.warn('[SyncEngine] Node pai não pôde ser sincronizado antes da nota. Abortando envio da nota para evitar erro de FK.');
+        return false;
       }
     } else {
       const localNode = await indexedDbService.getNode(note.nodeId);
       if (localNode) {
-        await this.syncNode(localNode);
+        nodeSynced = await this.syncNode(localNode);
+        if (!nodeSynced && !localNode.deletedAt) {
+          console.warn('[SyncEngine] Node pai não pôde ser sincronizado antes da nota. Abortando envio da nota para evitar erro de FK.');
+          return false;
+        }
       }
     }
 
@@ -451,6 +466,11 @@ class SyncEngineClass {
       if (!rpcError && rpcData) {
         // Status OK: operação atômica confirmada no banco
         if (rpcData.status === 'ok') {
+          console.log('[REMOTE WRITE SUCCESS] NOTE', {
+            id: note.id,
+            nodeId: note.nodeId,
+            version: versionNum,
+          });
           console.log('[SYNC SUCCESS]', {
             entityType: 'note',
             entityId: note.id,
@@ -713,6 +733,11 @@ class SyncEngineClass {
 
       // Verificação estrita dos dados retornados
       if (!upsertErr && upsertData && upsertData.node_id === canonicalNodeId) {
+        console.log('[REMOTE WRITE SUCCESS] NOTE', {
+          id: note.id,
+          nodeId: note.nodeId,
+          version: upsertData.version,
+        });
         console.log('[SYNC SUCCESS]', {
           entityType: 'note',
           entityId: note.id,
@@ -850,9 +875,12 @@ class SyncEngineClass {
 
             if (item.entityType === 'note') {
               // 1. Respeita a versão mais recente como soberana: busca o estado atual no IndexedDB
-              const sovereignNote = await indexedDbService.getNote(item.entityId);
+              const sovereignNote =
+                (await indexedDbService.getNote(item.entityId)) ||
+                (await indexedDbService.getNoteByNodeId(item.entityId));
               let noteToSync = item.payload?.note as NoteRecord | undefined;
-              const parentNode = item.payload?.node as TreeNode | undefined;
+              const targetNodeId = sovereignNote?.nodeId || noteToSync?.nodeId || item.payload?.node?.id || item.entityId;
+              let parentNode = (await indexedDbService.getNode(targetNodeId)) || (item.payload?.node as TreeNode | undefined);
 
               if (sovereignNote) {
                 const sovereignVersion = Number(sovereignNote.version || 1);
@@ -878,7 +906,25 @@ class SyncEngineClass {
               }
 
               if (noteToSync) {
-                success = await this.syncNote(noteToSync, parentNode);
+                // 2. Garante a dependência NODE -> NOTE antes de persistir a nota no Supabase
+                if (parentNode) {
+                  const nodeSuccess = await this.syncNode(parentNode);
+                  if (!nodeSuccess && !parentNode.deletedAt) {
+                    console.warn('[QUEUE DEPENDENCY BLOCKED]', {
+                      entityType: 'note',
+                      noteId: item.entityId,
+                      nodeId: parentNode.id,
+                      reason: 'Node dependency failed to sync. Note will remain pending.',
+                    });
+                    success = false;
+                  } else {
+                    // Node sincronizado com sucesso: conclui o item do nó na fila se pendente
+                    await indexedDbService.completeSyncItem(`sync_node_${parentNode.id}`);
+                    success = await this.syncNote(noteToSync, parentNode);
+                  }
+                } else {
+                  success = await this.syncNote(noteToSync);
+                }
               } else {
                 console.warn('[QUEUE DISCARD INVALID]', { entityType: 'note', itemId: item.id });
                 success = true; // Payload vazio ou inválido, limpa da fila
@@ -1255,44 +1301,94 @@ class SyncEngineClass {
   }
 
   async debugRemoteSnapshot(userId: string): Promise<void> {
-    const supabase = getSupabase();
-    if (!supabase || !isSupabaseConfigured) return;
-    try {
-      const [{ count: nodeCount }, { count: noteCount }] = await Promise.all([
-        supabase.from('nodes').select('*', { count: 'exact', head: true }).eq('user_id', userId).is('deleted_at', null),
-        supabase.from('notes').select('*', { count: 'exact', head: true }).eq('user_id', userId),
-      ]);
-      console.log('[REMOTE SNAPSHOT]', {
-        userId,
-        remoteActiveNodes: nodeCount ?? 0,
-        remoteNotes: noteCount ?? 0,
-      });
-    } catch (err) {
-      console.warn('[SyncEngine] Erro no debugRemoteSnapshot:', err);
-    }
+    await this.debugDiagnosticSnapshot(userId);
   }
 
   async debugLocalSnapshot(userId: string): Promise<void> {
+    await this.debugDiagnosticSnapshot(userId);
+  }
+
+  /**
+   * Diagnóstico completo de integridade e divergência entre Supabase e IndexedDB.
+   * Conforme requisitos 36 e 37 do protocolo de sincronização.
+   */
+  async debugDiagnosticSnapshot(userId: string): Promise<void> {
+    const supabase = getSupabase();
+    if (!supabase || !isSupabaseConfigured) return;
     try {
-      const [localNodes, localNotes, pendingCount] = await Promise.all([
+      const [nodesRes, notesRes] = await Promise.all([
+        supabase.from('nodes').select('id, user_id, deleted_at').eq('user_id', userId),
+        supabase.from('notes').select('id, node_id, user_id').eq('user_id', userId),
+      ]);
+
+      const remoteNodes = nodesRes.data || [];
+      const remoteNotes = notesRes.data || [];
+      const activeRemoteNodes = remoteNodes.filter((n) => !n.deleted_at);
+      const deletedRemoteNodes = remoteNodes.filter((n) => Boolean(n.deleted_at));
+
+      const remoteNodeIdSet = new Set(remoteNodes.map((n) => n.id));
+      const notesWithoutNode = remoteNotes
+        .filter((n) => !remoteNodeIdSet.has(n.node_id))
+        .map((n) => ({ noteId: n.id, nodeId: n.node_id }));
+
+      console.log('[REMOTE SNAPSHOT]', {
+        userId,
+        remoteNodesCount: remoteNodes.length,
+        remoteActiveNodesCount: activeRemoteNodes.length,
+        remoteNotesCount: remoteNotes.length,
+        notesWithoutNodeCount: notesWithoutNode.length,
+        notesWithoutNode,
+        deletedNodesCount: deletedRemoteNodes.length,
+      });
+
+      const [localNodes, localNotes, pendingCount, tombstoneIds] = await Promise.all([
         indexedDbService.getAllNodes(userId),
         indexedDbService.getAllNotes(userId),
         indexedDbService.getPendingSyncCount(userId),
+        indexedDbService.getTombstoneNodeIds(userId),
       ]);
+
       console.log('[LOCAL SNAPSHOT]', {
         userId,
-        localActiveNodes: localNodes.length,
-        localNotes: localNotes.length,
-        pendingQueueItems: pendingCount,
+        localNodesCount: localNodes.length,
+        localNotesCount: localNotes.length,
+        pendingQueueCount: pendingCount,
+        deletedTombstonesCount: tombstoneIds.length,
+      });
+
+      const localNodeIdSet = new Set(localNodes.map((n) => n.id));
+      const localNoteIdSet = new Set(localNotes.map((n) => n.id));
+      const activeRemoteNodeIdSet = new Set(activeRemoteNodes.map((n) => n.id));
+      const remoteNoteIdSet = new Set(remoteNotes.map((n) => n.id));
+
+      const remoteOnlyNodes = activeRemoteNodes
+        .filter((n) => !localNodeIdSet.has(n.id))
+        .map((n) => n.id);
+      const localOnlyNodes = localNodes
+        .filter((n) => !activeRemoteNodeIdSet.has(n.id))
+        .map((n) => n.id);
+      const remoteOnlyNotes = remoteNotes
+        .filter((n) => !localNoteIdSet.has(n.id))
+        .map((n) => n.id);
+      const localOnlyNotes = localNotes
+        .filter((n) => !remoteNoteIdSet.has(n.id))
+        .map((n) => n.id);
+
+      console.log('[SYNC DIFF]', {
+        remoteOnlyNodes,
+        localOnlyNodes,
+        remoteOnlyNotes,
+        localOnlyNotes,
       });
     } catch (err) {
-      console.warn('[SyncEngine] Erro no debugLocalSnapshot:', err);
+      console.warn('[SyncEngine] Erro ao executar diagnóstico de snapshot:', err);
     }
   }
 
   /**
    * Hidratação inicial do IndexedDB a partir do Supabase ao iniciar sessão.
-   * Respeita LWW com comparação estrita de timestamps e preserva tombstones.
+   * Respeita LWW com comparação estrita de timestamps, preserva tombstones,
+   * trata erros por tabela individualmente e recupera notas órfãs.
    */
   async hydrateFromRemote(userId: string): Promise<boolean> {
     const supabase = getSupabase();
@@ -1330,11 +1426,28 @@ class SyncEngineClass {
           .eq('user_id', authUserId),
       ]);
 
-      if (nodesRes.error) throw nodesRes.error;
-      if (notesRes.error) throw notesRes.error;
-      if (tagsRes.error) throw tagsRes.error;
-      if (noteTagsRes.error) throw noteTagsRes.error;
-      if (linksRes.error) throw linksRes.error;
+      // Tratamento individual de erro por tabela (requisito 28)
+      if (nodesRes.error) {
+        console.error('[HYDRATE ERROR] table: nodes error:', nodesRes.error);
+      }
+      if (notesRes.error) {
+        console.error('[HYDRATE ERROR] table: notes error:', notesRes.error);
+      }
+      if (tagsRes.error) {
+        console.error('[HYDRATE ERROR] table: tags error:', tagsRes.error);
+      }
+      if (noteTagsRes.error) {
+        console.error('[HYDRATE ERROR] table: note_tags error:', noteTagsRes.error);
+      }
+      if (linksRes.error) {
+        console.error('[HYDRATE ERROR] table: note_links error:', linksRes.error);
+      }
+
+      // Se ambas as tabelas primárias falharem, aborta sem corromper estado local
+      if (nodesRes.error && notesRes.error) {
+        console.error('[HYDRATE ABORT] Falha de comunicação nas tabelas nodes e notes. Preservando estado local.');
+        return false;
+      }
 
       const remoteNodes = nodesRes.data || [];
       const remoteNotes = notesRes.data || [];
@@ -1342,182 +1455,245 @@ class SyncEngineClass {
       const remoteNoteTags = noteTagsRes.data || [];
       const remoteLinks = linksRes.data || [];
 
-      // 1. Hidrata IndexedDB com os nós remotos (incluindo tombstones)
-      for (const d of remoteNodes) {
-        const local = await indexedDbService.getNode(d.id);
-        const remoteTime = new Date(d.updated_at || d.created_at || 0).getTime();
+      // 1. Hidrata IndexedDB com os nós remotos se a consulta de nodes foi bem-sucedida
+      if (!nodesRes.error) {
+        for (const d of remoteNodes) {
+          const local = await indexedDbService.getNode(d.id);
+          const remoteTime = new Date(d.updated_at || d.created_at || 0).getTime();
 
-        if (d.deleted_at) {
+          if (d.deleted_at) {
+            if (local) {
+              const localTime = new Date(local.updatedAt || local.createdAt || 0).getTime();
+              if (!local.deletedAt && localTime > remoteTime) {
+                continue; // Local reativou ou modificou depois da exclusão remota
+              }
+              local.deletedAt = d.deleted_at;
+              local.updatedAt = d.updated_at || d.deleted_at;
+              await indexedDbService.saveNode(local);
+              realtimeService.registerLocalNodeUpdate(local.id, local.updatedAt, true);
+            } else {
+              const tombstone: TreeNode = {
+                id: d.id,
+                userId: d.user_id,
+                parentId: d.parent_id,
+                type: d.type,
+                name: d.name,
+                position: Number(d.position),
+                createdAt: d.created_at,
+                updatedAt: d.updated_at || d.deleted_at,
+                deletedAt: d.deleted_at,
+              };
+              await indexedDbService.saveNode(tombstone);
+              realtimeService.registerLocalNodeUpdate(d.id, tombstone.updatedAt, true);
+            }
+            continue;
+          }
+
+          // Registro remoto ativo
           if (local) {
-            const localTime = new Date(local.updatedAt || local.createdAt || 0).getTime();
-            if (!local.deletedAt && localTime > remoteTime) {
-              continue; // Local reativou ou modificou depois da exclusão remota
-            }
-            local.deletedAt = d.deleted_at;
-            local.updatedAt = d.updated_at || d.deleted_at;
-            await indexedDbService.saveNode(local);
-            realtimeService.registerLocalNodeUpdate(local.id, local.updatedAt, true);
-          } else {
-            const tombstone: TreeNode = {
-              id: d.id,
-              userId: d.user_id,
-              parentId: d.parent_id,
-              type: d.type,
-              name: d.name,
-              position: Number(d.position),
-              createdAt: d.created_at,
-              updatedAt: d.updated_at || d.deleted_at,
-              deletedAt: d.deleted_at,
-            };
-            await indexedDbService.saveNode(tombstone);
-            realtimeService.registerLocalNodeUpdate(d.id, tombstone.updatedAt, true);
-          }
-          continue;
-        }
-
-        // Registro remoto ativo
-        if (local) {
-          if (local.deletedAt) {
-            const localDeletedTime = new Date(local.deletedAt).getTime();
-            if (localDeletedTime >= remoteTime) {
-              continue; // Preserva tombstone local
-            }
-          } else {
-            const localTime = new Date(local.updatedAt || local.createdAt || 0).getTime();
-            if (localTime >= remoteTime) {
-              continue; // Local é igual ou mais novo
+            if (local.deletedAt) {
+              const localDeletedTime = new Date(local.deletedAt).getTime();
+              if (localDeletedTime >= remoteTime) {
+                continue; // Preserva tombstone local
+              }
+            } else {
+              const localTime = new Date(local.updatedAt || local.createdAt || 0).getTime();
+              if (localTime >= remoteTime) {
+                continue; // Local é igual ou mais novo
+              }
             }
           }
-        }
 
-        const node: TreeNode = {
-          id: d.id,
-          userId: d.user_id,
-          parentId: d.parent_id,
-          type: d.type,
-          name: d.name,
-          position: Number(d.position),
-          createdAt: d.created_at,
-          updatedAt: d.updated_at,
-          deletedAt: d.deleted_at,
-        };
-        await indexedDbService.saveNode(node);
-        this.lastSyncedNodeTime.set(d.id, d.updated_at);
+          const node: TreeNode = {
+            id: d.id,
+            userId: d.user_id,
+            parentId: d.parent_id,
+            type: d.type,
+            name: d.name,
+            position: Number(d.position),
+            createdAt: d.created_at,
+            updatedAt: d.updated_at,
+            deletedAt: d.deleted_at,
+          };
+          await indexedDbService.saveNode(node);
+          this.lastSyncedNodeTime.set(d.id, d.updated_at);
+        }
       }
 
-      // 2. Hidrata notas respeitando Last Write Wins (LWW) e comparação de timestamps
-      for (const d of remoteNotes) {
-        const local = await indexedDbService.getNote(d.id);
-        const remoteVersion = Number(d.version || 1);
-        const remoteTime = new Date(d.updated_at || d.created_at || 0).getTime();
+      // 2. Hidrata notas se a consulta de notes foi bem-sucedida
+      if (!notesRes.error) {
+        // Cria remoteNodeMap para verificar notas órfãs (requisitos 8, 9, 38)
+        const remoteNodeMap = new Map<string, any>();
+        for (const rn of remoteNodes) {
+          remoteNodeMap.set(rn.id, rn);
+        }
 
-        if (local) {
-          const localVersion = Number(local.version || 1);
-          const localTime = new Date(local.updatedAt || local.createdAt || 0).getTime();
-
-          if (localVersion > remoteVersion) {
-            continue;
-          }
-          if (localVersion === remoteVersion && localTime >= remoteTime) {
-            continue;
+        const orphanNotes: any[] = [];
+        for (const rn of remoteNotes) {
+          if (!remoteNodeMap.has(rn.node_id)) {
+            orphanNotes.push(rn);
           }
         }
 
-        let parsedEditorContent = d.editor_content;
-        if (typeof parsedEditorContent === 'string') {
-          try {
-            parsedEditorContent = JSON.parse(parsedEditorContent);
-          } catch {
-            parsedEditorContent = null;
+        if (orphanNotes.length > 0) {
+          console.warn(`[SYNC INCONSISTENCY] Detectadas ${orphanNotes.length} notas órfãs no Supabase sem registro em nodes:`);
+          for (const on of orphanNotes) {
+            console.warn('[ORPHAN NOTE FOUND]', { noteId: on.id, nodeId: on.node_id });
+
+            // 1. Tenta recuperar node do IndexedDB local
+            const localNode = await indexedDbService.getNode(on.node_id);
+            if (localNode) {
+              console.info(`[ORPHAN REPAIR] Node ${on.node_id} existe localmente. Enviando ao Supabase...`);
+              await this.syncNode(localNode);
+              remoteNodeMap.set(localNode.id, localNode);
+            } else {
+              // 2. Não existe nem no Supabase nem no IndexedDB: reconstrói TreeNode na raiz
+              const recoveredTitle = MarkdownService.extractTitle(on.markdown_content || '') || 'Nota Recuperada';
+              console.info(`[ORPHAN RECONSTRUCT] Reconstruindo TreeNode para nota órfã ${on.node_id} com título: "${recoveredTitle}"`);
+              const reconstructedNode: TreeNode = {
+                id: on.node_id,
+                userId: authUserId,
+                parentId: null,
+                type: 'note',
+                name: recoveredTitle,
+                position: 9999,
+                createdAt: on.created_at || new Date().toISOString(),
+                updatedAt: on.updated_at || new Date().toISOString(),
+              };
+              await indexedDbService.saveNode(reconstructedNode);
+              await this.syncNode(reconstructedNode);
+              remoteNodeMap.set(reconstructedNode.id, reconstructedNode);
+            }
           }
         }
-        if (
-          !parsedEditorContent ||
-          typeof parsedEditorContent !== 'object' ||
-          !Array.isArray(parsedEditorContent.content)
-        ) {
-          parsedEditorContent = MarkdownService.markdownToVisual(
-            d.markdown_content || '',
-            'Nota'
-          );
-        }
 
-        const note: NoteRecord = {
-          id: d.id,
-          nodeId: d.node_id,
-          userId: d.user_id,
-          markdownContent: d.markdown_content || '',
-          editorContent: parsedEditorContent,
-          isFavorite: Boolean(d.is_favorite),
-          lastOpenedAt: d.last_opened_at,
-          version: remoteVersion,
-          createdAt: d.created_at,
-          updatedAt: d.updated_at,
-        };
-        await indexedDbService.saveNote(note);
+        // Hidrata notas respeitando Last Write Wins (LWW) e comparação de timestamps
+        for (const d of remoteNotes) {
+          const local = await indexedDbService.getNote(d.id);
+          const remoteVersion = Number(d.version || 1);
+          const remoteTime = new Date(d.updated_at || d.created_at || 0).getTime();
+
+          if (local) {
+            const localVersion = Number(local.version || 1);
+            const localTime = new Date(local.updatedAt || local.createdAt || 0).getTime();
+
+            if (localVersion > remoteVersion) {
+              continue;
+            }
+            if (localVersion === remoteVersion && localTime >= remoteTime) {
+              continue;
+            }
+          }
+
+          let parsedEditorContent = d.editor_content;
+          if (typeof parsedEditorContent === 'string') {
+            try {
+              parsedEditorContent = JSON.parse(parsedEditorContent);
+            } catch {
+              parsedEditorContent = null;
+            }
+          }
+          if (
+            !parsedEditorContent ||
+            typeof parsedEditorContent !== 'object' ||
+            !Array.isArray(parsedEditorContent.content)
+          ) {
+            parsedEditorContent = MarkdownService.markdownToVisual(
+              d.markdown_content || '',
+              'Nota'
+            );
+          }
+
+          const note: NoteRecord = {
+            id: d.id,
+            nodeId: d.node_id,
+            userId: d.user_id,
+            markdownContent: d.markdown_content || '',
+            editorContent: parsedEditorContent,
+            isFavorite: Boolean(d.is_favorite),
+            lastOpenedAt: d.last_opened_at,
+            version: remoteVersion,
+            createdAt: d.created_at,
+            updatedAt: d.updated_at,
+          };
+          await indexedDbService.saveNote(note);
+        }
       }
 
       // 3. Hidrata tags
-      for (const t of remoteTags) {
-        const tag: TagRecord = {
-          id: t.id,
-          userId: t.user_id,
-          name: t.name,
-          normalizedName: t.normalized_name,
-          createdAt: t.created_at,
-        };
-        await indexedDbService.saveTag(tag);
-      }
-
-      // 4. Reconstitui note_tags no IndexedDB
-      const tagMapByNote = new Map<string, string[]>();
-      for (const nt of remoteNoteTags) {
-        const list = tagMapByNote.get(nt.note_id) || [];
-        list.push(nt.tag_id);
-        tagMapByNote.set(nt.note_id, list);
-      }
-      for (const [nId, tIds] of tagMapByNote.entries()) {
-        await indexedDbService.setNoteTags(authUserId, nId, tIds);
-        this.lastSyncedTags.set(toCanonicalUuid(nId), [...tIds].map(toCanonicalUuid).sort().join(','));
-      }
-
-      // 5. Reconstitui note_links no IndexedDB
-      const linkMapBySource = new Map<string, string[]>();
-      for (const l of remoteLinks) {
-        const list = linkMapBySource.get(l.source_note_id) || [];
-        list.push(l.target_note_id);
-        linkMapBySource.set(l.source_note_id, list);
-      }
-      for (const [sId, targets] of linkMapBySource.entries()) {
-        await indexedDbService.setNoteLinks(authUserId, sId, targets);
-        this.lastSyncedLinks.set(toCanonicalUuid(sId), [...targets].map(toCanonicalUuid).sort().join(','));
-      }
-
-      // 6. Envia para o Supabase registros locais criados offline (sem existência no remoto)
-      const allLocalNodes = await indexedDbService.getAllNodesRaw(authUserId);
-      const remoteNodeIdSet = new Set(remoteNodes.map((rn: any) => rn.id));
-      for (const localNode of allLocalNodes) {
-        if (!remoteNodeIdSet.has(localNode.id) && !localNode.deletedAt) {
-          await this.syncNode(localNode);
+      if (!tagsRes.error) {
+        for (const t of remoteTags) {
+          const tag: TagRecord = {
+            id: t.id,
+            userId: t.user_id,
+            name: t.name,
+            normalizedName: t.normalized_name,
+            createdAt: t.created_at,
+          };
+          await indexedDbService.saveTag(tag);
         }
       }
 
-      const allLocalNotes = await indexedDbService.getAllNotes(authUserId);
-      const remoteNoteIdSet = new Set(remoteNotes.map((rn: any) => rn.id));
-      for (const localNote of allLocalNotes) {
-        if (!remoteNoteIdSet.has(localNote.id)) {
-          await this.syncNote(localNote);
+      // 4. Reconstitui note_tags no IndexedDB
+      if (!noteTagsRes.error) {
+        const tagMapByNote = new Map<string, string[]>();
+        for (const nt of remoteNoteTags) {
+          const list = tagMapByNote.get(nt.note_id) || [];
+          list.push(nt.tag_id);
+          tagMapByNote.set(nt.note_id, list);
+        }
+        for (const [nId, tIds] of tagMapByNote.entries()) {
+          await indexedDbService.setNoteTags(authUserId, nId, tIds);
+          this.lastSyncedTags.set(toCanonicalUuid(nId), [...tIds].map(toCanonicalUuid).sort().join(','));
+        }
+      }
+
+      // 5. Reconstitui note_links no IndexedDB
+      if (!linksRes.error) {
+        const linkMapBySource = new Map<string, string[]>();
+        for (const l of remoteLinks) {
+          const list = linkMapBySource.get(l.source_note_id) || [];
+          list.push(l.target_note_id);
+          linkMapBySource.set(l.source_note_id, list);
+        }
+        for (const [sId, targets] of linkMapBySource.entries()) {
+          await indexedDbService.setNoteLinks(authUserId, sId, targets);
+          this.lastSyncedLinks.set(toCanonicalUuid(sId), [...targets].map(toCanonicalUuid).sort().join(','));
+        }
+      }
+
+      // 6. Envia para o Supabase registros locais criados offline (sem existência no remoto)
+      if (!nodesRes.error && !notesRes.error) {
+        const allLocalNodes = await indexedDbService.getAllNodesRaw(authUserId);
+        const remoteNodeIdSet = new Set(remoteNodes.map((rn: any) => rn.id));
+        for (const localNode of allLocalNodes) {
+          if (!remoteNodeIdSet.has(localNode.id) && !localNode.deletedAt) {
+            await this.syncNode(localNode);
+          }
+        }
+
+        const allLocalNotes = await indexedDbService.getAllNotes(authUserId);
+        const remoteNoteIdSet = new Set(remoteNotes.map((rn: any) => rn.id));
+        const remoteNoteNodeIdSet = new Set(remoteNotes.map((rn: any) => rn.node_id));
+        for (const localNote of allLocalNotes) {
+          if (!remoteNoteIdSet.has(localNote.id) && !remoteNoteNodeIdSet.has(localNote.nodeId)) {
+            const parent = await indexedDbService.getNode(localNote.nodeId);
+            if (parent && !parent.deletedAt) {
+              await this.syncNode(parent);
+            }
+            await this.syncNote(localNote);
+          }
         }
       }
 
       // Processa itens que possam ter ficado pendentes na fila local
       await this.processPersistentQueue();
 
-      await this.debugRemoteSnapshot(authUserId);
-      await this.debugLocalSnapshot(authUserId);
+      // Executa diagnóstico completo
+      await this.debugDiagnosticSnapshot(authUserId);
 
       this.emitStatus('saved');
-      console.info('[SyncEngine] Hidratação inicial concluída.');
+      console.info('[SyncEngine] Hidratação inicial concluída com sucesso.');
       return true;
     } catch (err) {
       console.error('[SyncEngine] Erro na hidratação remota:', err);

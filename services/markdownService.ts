@@ -16,6 +16,19 @@
 
 export class MarkdownService {
   /**
+   * Extrai o título textual de um conteúdo em Markdown
+   */
+  static extractTitle(markdown: string): string {
+    if (!markdown) return '';
+    const match = markdown.match(/^#\s*(.*)$/m);
+    if (match && match[1]?.trim()) {
+      return match[1].trim();
+    }
+    const firstLine = markdown.split('\n').find((l) => l.trim().length > 0);
+    return firstLine ? firstLine.trim().slice(0, 50) : '';
+  }
+
+  /**
    * Converts Tiptap JSON document to generic portable Markdown string.
    */
   static visualToMarkdown(json: any): string {
