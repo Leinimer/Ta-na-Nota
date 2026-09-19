@@ -23,56 +23,82 @@ export const authService = {
     }
 
     const supabase = getSupabase();
+    const isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
+
     if (supabase && isSupabaseConfigured) {
-      try {
-        const { data: { user }, error } = await supabase.auth.getUser();
-        if (!error && user) {
-          // Attempt to enrich with profile data (name, username)
-          let username = user.user_metadata?.username;
-          let name = user.user_metadata?.name || user.user_metadata?.display_name;
+      if (isOnline) {
+        try {
+          const { data: { user }, error } = await supabase.auth.getUser();
+          if (!error && user) {
+            // Attempt to enrich with profile data (name, username)
+            let username = user.user_metadata?.username;
+            let name = user.user_metadata?.name || user.user_metadata?.display_name;
 
-          try {
-            const { data: profile } = await supabase
-              .from('profiles')
-              .select('name, display_name, username')
-              .eq('id', user.id)
-              .maybeSingle();
+            try {
+              const { data: profile } = await supabase
+                .from('profiles')
+                .select('name, display_name, username')
+                .eq('id', user.id)
+                .maybeSingle();
 
-            if (profile) {
-              name = profile.name || profile.display_name || name;
-              username = profile.username || username;
+              if (profile) {
+                name = profile.name || profile.display_name || name;
+                username = profile.username || username;
+              }
+            } catch {
+              // Profile query might fail before migration is run
             }
-          } catch {
-            // Profile query might fail before migration is run
+
+            const appUser: AppUser = {
+              id: user.id,
+              email: user.email,
+              name: name || user.email?.split('@')[0],
+              displayName: name || user.email?.split('@')[0],
+              username: username || user.email?.split('@')[0],
+              avatarUrl: user.user_metadata?.avatar_url,
+            };
+
+            await indexedDbService.setLocalUser(appUser);
+            if (typeof window !== 'undefined') {
+              sessionStorage.setItem(SESSION_ACTIVE_KEY, 'true');
+            }
+            return appUser;
           }
 
-          const appUser: AppUser = {
-            id: user.id,
-            email: user.email,
-            name: name || user.email?.split('@')[0],
-            displayName: name || user.email?.split('@')[0],
-            username: username || user.email?.split('@')[0],
-            avatarUrl: user.user_metadata?.avatar_url,
-          };
+          // Se Supabase está online e não retornou usuário válido com sessão:
+          console.warn('[SYNC AUTH UNAVAILABLE]', {
+            reason: error?.message || 'No active Supabase session found while online',
+            hasSupabaseClient: true,
+            hasSession: false,
+          });
 
-          await indexedDbService.setLocalUser(appUser);
-          if (typeof window !== 'undefined') {
-            sessionStorage.setItem(SESSION_ACTIVE_KEY, 'true');
-          }
-          return appUser;
+          // REGRA DEFINITIVA: NUNCA fingir que existe sessão remota usando o IndexedDB localmente quando online
+          return null;
+        } catch (err) {
+          console.warn('[SYNC AUTH UNAVAILABLE]', {
+            reason: String(err),
+            hasSupabaseClient: true,
+            hasSession: false,
+          });
+          return null;
         }
-      } catch (err) {
-        console.warn('Supabase auth check failed:', err);
+      } else {
+        // Dispositivo explicitamente OFFLINE: permite carregar cache do IndexedDB
+        const localUser = await indexedDbService.getLocalUser();
+        if (localUser && localUser.id !== 'demo-user-tactility-1') {
+          console.info('[OFFLINE CACHE LOADED]', { userId: localUser.id });
+          return localUser;
+        }
+        return null;
       }
+    } else {
+      console.warn('[SUPABASE NOT CONFIGURED]');
+      const localUser = await indexedDbService.getLocalUser();
+      if (localUser && localUser.id !== 'demo-user-tactility-1') {
+        return localUser;
+      }
+      return null;
     }
-
-    // Check local session only if already explicitly logged in previously
-    const localUser = await indexedDbService.getLocalUser();
-    if (localUser && localUser.id !== 'demo-user-tactility-1') {
-      return localUser;
-    }
-
-    return null;
   },
 
   /**
@@ -395,5 +421,21 @@ export const authService = {
       localStorage.removeItem(KEEP_CONNECTED_KEY);
     }
     await indexedDbService.setLocalUser(null);
+  },
+
+  /**
+   * Registers a listener for Supabase authentication state changes.
+   */
+  onAuthStateChange(callback: (event: string, session: any) => void): (() => void) | undefined {
+    const supabase = getSupabase();
+    if (supabase && isSupabaseConfigured) {
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+        callback(event, session);
+      });
+      return () => {
+        subscription.unsubscribe();
+      };
+    }
+    return undefined;
   },
 };

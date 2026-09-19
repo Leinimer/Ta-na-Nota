@@ -322,16 +322,22 @@ export function AppShell() {
 
   useEffect(() => {
     async function initUser() {
+      // Diagnóstico obrigatório de inicialização da configuração do Supabase
+      await syncEngine.runStartupDiagnostic();
+
       try {
         const user = await authService.getCurrentUser();
-        setCurrentUser(user);
         if (user) {
           syncEngine.setAuthenticatedUserId(user.id);
+          setCurrentUser(user);
           await indexedDbService.migrateLegacyIds(user.id);
           const tombstoneIds = await indexedDbService.getTombstoneNodeIds(user.id);
           realtimeService.loadTombstoneIds(tombstoneIds);
           await syncEngine.hydrateFromRemote(user.id);
           await refreshAppData(user.id);
+        } else {
+          syncEngine.setAuthenticatedUserId(null);
+          setCurrentUser(null);
         }
       } catch (err) {
         console.warn('Erro ao inicializar sessão do usuário:', err);
@@ -340,6 +346,25 @@ export function AppShell() {
       }
     }
     initUser();
+
+    const unsubAuth = authService.onAuthStateChange(async (event, session) => {
+      console.log('[AUTH STATE CHANGE]', event, session?.user?.id);
+      if (event === 'SIGNED_OUT') {
+        syncEngine.setAuthenticatedUserId(null);
+        realtimeService.unsubscribe();
+        setCurrentUser(null);
+        setActiveNode(null);
+        setActiveNote(null);
+        setTree([]);
+        setTags([]);
+      } else if (session?.user?.id && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED')) {
+        syncEngine.setAuthenticatedUserId(session.user.id);
+      }
+    });
+
+    return () => {
+      if (unsubAuth) unsubAuth();
+    };
   }, [refreshAppData]);
 
   // Escuta status de sincronização emitido pelo syncEngine
@@ -765,10 +790,14 @@ export function AppShell() {
     return (
       <AuthScreen
         onAuthenticated={async (user) => {
+          syncEngine.setAuthenticatedUserId(user.id);
           setCurrentUser(user);
           await indexedDbService.migrateLegacyIds(user.id);
+          const tombstoneIds = await indexedDbService.getTombstoneNodeIds(user.id);
+          realtimeService.loadTombstoneIds(tombstoneIds);
           await syncEngine.hydrateFromRemote(user.id);
           await refreshAppData(user.id);
+          realtimeService.subscribe(user.id);
         }}
       />
     );

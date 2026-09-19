@@ -554,8 +554,22 @@ export const indexedDbService = {
           }
           cursor.continue();
         } else {
-          // Ordena por data de criação para processar cronologicamente
-          results.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+          // Ordena com prioridade rigorosa:
+          // 1. Deletes primeiro (soberania de exclusão)
+          // 2. Nodes antes de notes (satisfazer chave estrangeira FK no Supabase)
+          // 3. Ordem cronológica de criação
+          results.sort((a, b) => {
+            const aIsDel = a.operation === 'delete' ? 0 : 1;
+            const bIsDel = b.operation === 'delete' ? 0 : 1;
+            if (aIsDel !== bIsDel) return aIsDel - bIsDel;
+
+            const typePriority = (t: string) => (t === 'node' ? 0 : t === 'note' ? 1 : 2);
+            const aP = typePriority(a.entityType);
+            const bP = typePriority(b.entityType);
+            if (aP !== bP) return aP - bP;
+
+            return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+          });
           resolve(results);
         }
       };

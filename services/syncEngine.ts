@@ -19,6 +19,37 @@ export function toCanonicalUuid(id: string | null | undefined): string {
   return crypto.randomUUID();
 }
 
+export type SyncErrorType = 'AUTH' | 'RLS' | 'FK' | 'UNIQUE' | 'NETWORK' | 'RPC' | 'VALIDATION' | 'UNKNOWN';
+
+export function classifySyncError(error: any): SyncErrorType {
+  if (!error) return 'UNKNOWN';
+  const code = String(error?.code || '');
+  const msg = String(error?.message || error || '').toLowerCase();
+
+  if (code === 'P0001' || msg.includes('not authenticated') || msg.includes('jwt') || msg.includes('session missing') || msg.includes('session expired')) {
+    return 'AUTH';
+  }
+  if (code === '42501' || msg.includes('violates row-level security policy') || msg.includes('row-level security')) {
+    return 'RLS';
+  }
+  if (code === '23503' || msg.includes('foreign key') || msg.includes('violates foreign key')) {
+    return 'FK';
+  }
+  if (code === '23505' || msg.includes('unique constraint') || msg.includes('duplicate key')) {
+    return 'UNIQUE';
+  }
+  if (code === '42883' || (msg.includes('function') && (msg.includes('does not exist') || msg.includes('could not find')))) {
+    return 'RPC';
+  }
+  if (code === 'XX000' || msg.includes('failed to fetch') || msg.includes('network') || msg.includes('connection') || msg.includes('timeout')) {
+    return 'NETWORK';
+  }
+  if (msg.includes('mismatch') || msg.includes('invalid payload')) {
+    return 'VALIDATION';
+  }
+  return 'UNKNOWN';
+}
+
 type SyncStatusListener = (status: SyncStatus) => void;
 
 class SyncEngineClass {
@@ -26,9 +57,17 @@ class SyncEngineClass {
   private inFlightNotes = new Set<string>();
   private inFlightNodes = new Set<string>();
 
-  // Cache de usuário autenticado para evitar chamadas de rede no caminho de UI
-  private cachedUserId: string | null = null;
+  // Separação estrita entre localUserId e authenticatedSupabaseUserId
+  private localUserId: string | null = null;
+  private authenticatedSupabaseUserId: string | null = null;
   private cachedSessionValidUntil = 0;
+
+  private get cachedUserId(): string | null {
+    return this.authenticatedSupabaseUserId;
+  }
+  private set cachedUserId(val: string | null) {
+    this.authenticatedSupabaseUserId = val;
+  }
 
   // Dicionários em memória para evitar requisições redundantes de Tags, Links e Nodes
   private lastSyncedTags = new Map<string, string>(); // canonicalNoteId -> sortedTagIds
@@ -47,6 +86,8 @@ class SyncEngineClass {
   constructor() {
     if (typeof window !== 'undefined') {
       (window as any).debugRemoteNote = (id: string) => this.debugRemoteNote(id);
+      (window as any).debugSupabaseConnection = () => this.debugSupabaseConnection();
+      (window as any).debugCreateRoundTrip = () => this.debugCreateRoundTrip();
 
       window.addEventListener('online', () => {
         console.info('[SyncEngine] Conexão restabelecida. Processando fila de sincronização...');
@@ -82,50 +123,267 @@ class SyncEngineClass {
   }
 
   /**
-   * Define o ID do usuário autenticado para sincronização remota.
+   * Define a identidade do usuário autenticado no Supabase.
    */
   setAuthenticatedUserId(userId: string | null) {
-    this.cachedUserId = userId;
+    this.localUserId = userId;
+    this.authenticatedSupabaseUserId = userId;
     this.cachedSessionValidUntil = 0; // Força revalidação real de sessão com Supabase
   }
 
   /**
-   * Obtém o ID do usuário autenticado no Supabase com validação estrita de sessão ativa.
-   * Evita requisições anônimas que resultam em erros 42501 (violação de RLS) ou P0001 (Not authenticated).
+   * Valida rigorosamente a sessão remota no Supabase.
+   * Retorna authenticated=true somente quando houver cliente configurado,
+   * sessão ativa com access_token e session.user.id válido.
+   * NUNCA utiliza IndexedDB como substituto de autenticação remota.
    */
-  async getAuthenticatedUserId(): Promise<string | null> {
+  async ensureRemoteSession(): Promise<{
+    userId: string;
+    authenticated: true;
+  } | {
+    userId: null;
+    authenticated: false;
+  }> {
     const supabase = getSupabase();
-    if (!supabase || !isSupabaseConfigured) return null;
+    if (!supabase || !isSupabaseConfigured) {
+      if (!isSupabaseConfigured) {
+        console.warn('[SUPABASE NOT CONFIGURED]');
+      }
+      this.authenticatedSupabaseUserId = null;
+      return { userId: null, authenticated: false };
+    }
+
+    if (!this.isOnline) {
+      return { userId: null, authenticated: false };
+    }
 
     const now = Date.now();
-    if (this.cachedUserId && now < this.cachedSessionValidUntil) {
-      return this.cachedUserId;
+    if (this.authenticatedSupabaseUserId && now < this.cachedSessionValidUntil) {
+      return { userId: this.authenticatedSupabaseUserId, authenticated: true };
     }
 
     try {
       const { data: { session }, error } = await supabase.auth.getSession();
       if (error || !session || !session.user || !session.access_token) {
-        this.cachedUserId = null;
+        this.authenticatedSupabaseUserId = null;
         this.cachedSessionValidUntil = 0;
-        return null;
+        console.warn('[SYNC AUTH UNAVAILABLE]', {
+          reason: error?.message || 'No valid Supabase session or access token found',
+          hasSupabaseClient: true,
+          hasSession: false,
+        });
+        return { userId: null, authenticated: false };
       }
 
       const activeUid = session.user.id;
-      if (this.cachedUserId && this.cachedUserId !== activeUid) {
-        console.warn('[SyncEngine] cachedUserId diverge da sessão ativa do Supabase. Sincronização remota ignorada.', {
-          cached: this.cachedUserId,
-          active: activeUid,
+      this.authenticatedSupabaseUserId = activeUid;
+      this.localUserId = activeUid;
+      this.cachedSessionValidUntil = now + 10000;
+      return { userId: activeUid, authenticated: true };
+    } catch (err: any) {
+      this.authenticatedSupabaseUserId = null;
+      this.cachedSessionValidUntil = 0;
+      console.warn('[SYNC AUTH UNAVAILABLE]', {
+        reason: err?.message || String(err),
+        hasSupabaseClient: true,
+        hasSession: false,
+      });
+      return { userId: null, authenticated: false };
+    }
+  }
+
+  /**
+   * Obtém o ID do usuário autenticado no Supabase com validação estrita de sessão ativa.
+   */
+  async getAuthenticatedUserId(): Promise<string | null> {
+    const result = await this.ensureRemoteSession();
+    if (result.authenticated) {
+      return result.userId;
+    }
+    return null;
+  }
+
+  /**
+   * Diagnóstico obrigatório de configuração no startup.
+   * Não expõe tokens, anon keys ou segredos.
+   */
+  async runStartupDiagnostic(): Promise<void> {
+    const supabase = getSupabase();
+    let sessionPresent = false;
+    let authUid: string | null = null;
+
+    if (supabase && isSupabaseConfigured) {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        sessionPresent = Boolean(session?.user && session?.access_token);
+        authUid = session?.user?.id || null;
+      } catch {
+        sessionPresent = false;
+      }
+    }
+
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.VITE_SUPABASE_URL || '';
+    const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_ANON_KEY || process.env.VITE_SUPABASE_PUBLISHABLE_KEY || '';
+
+    console.log('[SUPABASE CONFIG]', {
+      configured: isSupabaseConfigured,
+      urlPresent: Boolean(url && !url.includes('your-project')),
+      anonKeyPresent: Boolean(key && !key.includes('your-anon-key')),
+      sessionPresent,
+      authenticatedUserId: authUid,
+    });
+
+    if (!isSupabaseConfigured) {
+      console.warn('[SUPABASE NOT CONFIGURED]');
+    }
+  }
+
+  /**
+   * Teste direto da conexão com Supabase.
+   */
+  async debugSupabaseConnection(): Promise<{
+    session: 'OK' | 'FAIL';
+    nodes: 'OK' | 'FAIL';
+    notes: 'OK' | 'FAIL';
+    userId: string | null;
+  }> {
+    const supabase = getSupabase();
+    if (!supabase || !isSupabaseConfigured) {
+      console.log('[SUPABASE CONNECTION TEST]', {
+        session: 'FAIL',
+        nodes: 'FAIL',
+        notes: 'FAIL',
+        userId: null,
+      });
+      return { session: 'FAIL', nodes: 'FAIL', notes: 'FAIL', userId: null };
+    }
+
+    let sessionStatus: 'OK' | 'FAIL' = 'FAIL';
+    let nodesStatus: 'OK' | 'FAIL' = 'FAIL';
+    let notesStatus: 'OK' | 'FAIL' = 'FAIL';
+    let activeUid: string | null = null;
+
+    try {
+      const { data: { session }, error: sessErr } = await supabase.auth.getSession();
+      if (!sessErr && session?.user?.id) {
+        sessionStatus = 'OK';
+        activeUid = session.user.id;
+
+        const { error: nodeErr } = await supabase
+          .from('nodes')
+          .select('id')
+          .eq('user_id', activeUid)
+          .limit(1);
+        nodesStatus = !nodeErr ? 'OK' : 'FAIL';
+
+        const { error: noteErr } = await supabase
+          .from('notes')
+          .select('id')
+          .eq('user_id', activeUid)
+          .limit(1);
+        notesStatus = !noteErr ? 'OK' : 'FAIL';
+      }
+    } catch {
+      sessionStatus = 'FAIL';
+    }
+
+    console.log('[SUPABASE CONNECTION TEST]', {
+      session: sessionStatus,
+      nodes: nodesStatus,
+      notes: notesStatus,
+    });
+
+    return {
+      session: sessionStatus,
+      nodes: nodesStatus,
+      notes: notesStatus,
+      userId: activeUid,
+    };
+  }
+
+  /**
+   * Teste de round trip de gravação direta (client -> Supabase -> select -> delete).
+   */
+  async debugCreateRoundTrip(): Promise<boolean> {
+    const supabase = getSupabase();
+    if (!supabase || !isSupabaseConfigured) {
+      console.warn('[ROUND TRIP TEST] Supabase não está configurado.');
+      return false;
+    }
+
+    const authUid = await this.getAuthenticatedUserId();
+    if (!authUid) {
+      console.warn('[ROUND TRIP TEST] Usuário não autenticado no Supabase.');
+      return false;
+    }
+
+    const testNodeId = crypto.randomUUID();
+    const testNoteId = crypto.randomUUID();
+    const now = new Date().toISOString();
+
+    console.log('[ROUND TRIP TEST] Iniciando teste direto client -> Supabase -> select -> delete...');
+
+    try {
+      // 1. Inserir nó de teste
+      const { error: nodeErr } = await supabase
+        .from('nodes')
+        .insert({
+          id: testNodeId,
+          user_id: authUid,
+          name: '__test_round_trip__',
+          type: 'note',
+          position: 999999,
+          created_at: now,
+          updated_at: now,
         });
-        return null;
+
+      if (nodeErr) {
+        console.error('[ROUND TRIP TEST FAILED] Falha ao inserir node:', nodeErr);
+        return false;
       }
 
-      this.cachedUserId = activeUid;
-      this.cachedSessionValidUntil = now + 5000;
-      return activeUid;
+      // 2. Chamar RPC save_note_versioned para a nota de teste
+      const { data: rpcData, error: rpcErr } = await supabase.rpc('save_note_versioned', {
+        p_id: testNoteId,
+        p_node_id: testNodeId,
+        p_markdown_content: '# Teste Round Trip',
+        p_editor_content: null,
+        p_is_favorite: false,
+        p_last_opened_at: null,
+        p_version: 1,
+        p_updated_at: now,
+      });
+
+      if (rpcErr || (rpcData?.status !== 'inserted' && rpcData?.status !== 'updated')) {
+        console.error('[ROUND TRIP TEST FAILED] Falha na RPC save_note_versioned:', rpcErr || rpcData);
+        await supabase.from('nodes').delete().eq('id', testNodeId).eq('user_id', authUid);
+        return false;
+      }
+
+      // 3. Confirmar com select
+      const { data: selectNote, error: selectErr } = await supabase
+        .from('notes')
+        .select('id, node_id, version')
+        .eq('id', testNoteId)
+        .eq('user_id', authUid)
+        .maybeSingle();
+
+      if (selectErr || !selectNote) {
+        console.error('[ROUND TRIP TEST FAILED] Falha ao selecionar nota gravada:', selectErr);
+        await supabase.from('notes').delete().eq('id', testNoteId).eq('user_id', authUid);
+        await supabase.from('nodes').delete().eq('id', testNodeId).eq('user_id', authUid);
+        return false;
+      }
+
+      // 4. Limpar dados de teste
+      await supabase.from('notes').delete().eq('id', testNoteId).eq('user_id', authUid);
+      await supabase.from('nodes').delete().eq('id', testNodeId).eq('user_id', authUid);
+
+      console.log('[ROUND TRIP TEST SUCCESS] Gravação, RPC, select e limpeza concluídos com sucesso!');
+      return true;
     } catch (err) {
-      this.cachedUserId = null;
-      this.cachedSessionValidUntil = 0;
-      return null;
+      console.error('[ROUND TRIP TEST EXCEPTION]', err);
+      return false;
     }
   }
 
@@ -399,6 +657,7 @@ class SyncEngineClass {
             attempt,
             maxRetries,
             error: error || 'Database returned empty response or unverified payload on node upsert',
+            type: classifySyncError(error),
           });
         } catch (err: any) {
           const errMsg = err?.message || String(err);
@@ -414,7 +673,7 @@ class SyncEngineClass {
               entityId: effectiveNode.id,
               error: errMsg,
             });
-            this.cachedUserId = null;
+            this.authenticatedSupabaseUserId = null;
             this.cachedSessionValidUntil = 0;
             break;
           }
@@ -425,6 +684,7 @@ class SyncEngineClass {
             attempt,
             maxRetries,
             error: errMsg,
+            type: classifySyncError(err),
           });
         }
 
@@ -464,6 +724,11 @@ class SyncEngineClass {
 
     try {
       await indexedDbService.enqueueSyncItem(queueItem);
+      console.log('[QUEUE ENQUEUED NODE]', {
+        nodeId: node.id,
+        name: node.name,
+        operation: queueItem.operation,
+      });
     } catch (err) {
       console.warn('[SyncEngine] Falha ao persistir node na fila do IndexedDB:', err);
     }
@@ -994,6 +1259,12 @@ class SyncEngineClass {
 
     try {
       await indexedDbService.enqueueSyncItem(queueItem);
+      console.log('[QUEUE ENQUEUED NOTE]', {
+        noteId: note.id,
+        nodeId: note.nodeId,
+        operation: 'upsert',
+        version: queueItem.version,
+      });
     } catch (err) {
       console.warn('[SyncEngine] Falha ao persistir na fila do IndexedDB:', err);
     }
@@ -1029,6 +1300,11 @@ class SyncEngineClass {
 
     try {
       await indexedDbService.enqueueSyncItem(queueItem);
+      console.log('[QUEUE ENQUEUED NOTE]', {
+        noteId,
+        nodeId,
+        operation: 'delete',
+      });
     } catch (err) {
       console.warn('[SyncEngine] Falha ao enfileirar exclusão da nota no IndexedDB:', err);
     }

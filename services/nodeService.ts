@@ -152,6 +152,13 @@ export const nodeService = {
     // 1. Salva atomicamente no IndexedDB local em transação multi-store
     await indexedDbService.saveNoteAndNode(noteRecord, node);
 
+    console.log('[LOCAL CREATE NOTE]', {
+      nodeId,
+      noteId,
+      userId,
+      name: nodeName,
+    });
+
     // 2. Enfileira na sync_queue para sincronização em background (não bloqueia a UI)
     syncEngine.enqueueNode(node).catch((err) => {
       console.warn('[nodeService] Falha ao enfileirar nó da nova nota:', err);
@@ -290,6 +297,10 @@ export const nodeService = {
 
       if (node.type === 'note') {
         const noteRec = await indexedDbService.getNoteByNodeId(node.id);
+        console.log('[LOCAL DELETE NOTE]', {
+          nodeId: node.id,
+          noteId: noteRec?.id || node.id,
+        });
         if (noteRec) {
           syncEngine.enqueueNoteDelete(noteRec.id, node.id, node.userId).catch((err) => {
             console.warn('[nodeService] Falha ao enfileirar deleção de nota:', err);
