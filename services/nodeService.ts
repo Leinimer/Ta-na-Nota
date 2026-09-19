@@ -271,12 +271,31 @@ export const nodeService = {
         syncEngine.enqueueNode(affected).catch((err) => {
           console.warn('[nodeService] Falha ao enfileirar deleção de nó:', err);
         });
+
+        if (affected.type === 'note') {
+          indexedDbService.getNoteByNodeId(affected.id).then((noteRec) => {
+            if (noteRec) {
+              syncEngine.enqueueNoteDelete(noteRec.id, affected.id, node.userId).catch((err) => {
+                console.warn('[nodeService] Falha ao enfileirar deleção de nota:', err);
+              });
+            }
+          });
+        }
       }
     } else {
       await indexedDbService.saveNode(node);
       syncEngine.enqueueNode(node).catch((err) => {
         console.warn('[nodeService] Falha ao enfileirar deleção de nó:', err);
       });
+
+      if (node.type === 'note') {
+        const noteRec = await indexedDbService.getNoteByNodeId(node.id);
+        if (noteRec) {
+          syncEngine.enqueueNoteDelete(noteRec.id, node.id, node.userId).catch((err) => {
+            console.warn('[nodeService] Falha ao enfileirar deleção de nota:', err);
+          });
+        }
+      }
     }
   },
 

@@ -282,6 +282,20 @@ export const authService = {
       if (error) return { user: null, error: error.message };
 
       if (data.user) {
+        // Se a confirmação de e-mail estiver ativa no projeto Supabase, data.session virá como null
+        if (!data.session) {
+          if (data.user.identities && data.user.identities.length === 0) {
+            return {
+              user: null,
+              error: 'Uma conta com este e-mail já existe. Por favor, acesse a aba Entrar.',
+            };
+          }
+          return {
+            user: null,
+            error: 'Conta cadastrada com sucesso! Verifique sua caixa de entrada para confirmar o e-mail antes de entrar.',
+          };
+        }
+
         // Attempt to upsert profile record
         try {
           await supabase.from('profiles').upsert({

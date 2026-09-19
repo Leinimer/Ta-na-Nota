@@ -44,34 +44,38 @@ export const noteService = {
       note = await indexedDbService.getNoteByNodeId(nodeId);
     }
 
-    // Se não encontrado no IndexedDB, tenta buscar diretamente no Supabase
+    // Se não encontrado no IndexedDB, tenta buscar diretamente no Supabase se houver sessão ativa
     if (!note) {
-      const supabase = getSupabase();
-      if (supabase && isSupabaseConfigured) {
-        try {
-          const { data, error } = await supabase
-            .from('notes')
-            .select('*')
-            .eq('node_id', toCanonicalUuid(node.id))
-            .maybeSingle();
+      const authUserId = await syncEngine.getAuthenticatedUserId();
+      if (authUserId) {
+        const supabase = getSupabase();
+        if (supabase && isSupabaseConfigured) {
+          try {
+            const { data, error } = await supabase
+              .from('notes')
+              .select('*')
+              .eq('user_id', authUserId)
+              .eq('node_id', toCanonicalUuid(node.id))
+              .maybeSingle();
 
-          if (!error && data) {
-            note = {
-              id: data.id,
-              nodeId: data.node_id,
-              userId: data.user_id,
-              markdownContent: data.markdown_content || '',
-              editorContent: data.editor_content || MarkdownService.markdownToVisual(data.markdown_content || '', node.name ?? ''),
-              isFavorite: Boolean(data.is_favorite),
-              lastOpenedAt: data.last_opened_at,
-              version: Number(data.version || 1),
-              createdAt: data.created_at,
-              updatedAt: data.updated_at,
-            };
-            await indexedDbService.saveNote(note);
+            if (!error && data) {
+              note = {
+                id: data.id,
+                nodeId: data.node_id,
+                userId: data.user_id,
+                markdownContent: data.markdown_content || '',
+                editorContent: data.editor_content || MarkdownService.markdownToVisual(data.markdown_content || '', node.name ?? ''),
+                isFavorite: Boolean(data.is_favorite),
+                lastOpenedAt: data.last_opened_at,
+                version: Number(data.version || 1),
+                createdAt: data.created_at,
+                updatedAt: data.updated_at,
+              };
+              await indexedDbService.saveNote(note);
+            }
+          } catch (err) {
+            console.error('[noteService] Erro ao buscar nota no Supabase:', err);
           }
-        } catch (err) {
-          console.error('[noteService] Erro ao buscar nota no Supabase:', err);
         }
       }
     }

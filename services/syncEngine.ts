@@ -28,6 +28,7 @@ class SyncEngineClass {
 
   // Cache de usuário autenticado para evitar chamadas de rede no caminho de UI
   private cachedUserId: string | null = null;
+  private cachedSessionValidUntil = 0;
 
   // Dicionários em memória para evitar requisições redundantes de Tags, Links e Nodes
   private lastSyncedTags = new Map<string, string>(); // canonicalNoteId -> sortedTagIds
@@ -45,6 +46,8 @@ class SyncEngineClass {
 
   constructor() {
     if (typeof window !== 'undefined') {
+      (window as any).debugRemoteNote = (id: string) => this.debugRemoteNote(id);
+
       window.addEventListener('online', () => {
         console.info('[SyncEngine] Conexão restabelecida. Processando fila de sincronização...');
         this.isOnline = true;
@@ -79,31 +82,49 @@ class SyncEngineClass {
   }
 
   /**
-   * Define o ID do usuário autenticado para evitar chamadas de rede desnecessárias.
+   * Define o ID do usuário autenticado para sincronização remota.
    */
   setAuthenticatedUserId(userId: string | null) {
     this.cachedUserId = userId;
+    this.cachedSessionValidUntil = 0; // Força revalidação real de sessão com Supabase
   }
 
   /**
-   * Obtém o ID do usuário autenticado no Supabase com validação de sessão (com cache rápido).
+   * Obtém o ID do usuário autenticado no Supabase com validação estrita de sessão ativa.
+   * Evita requisições anônimas que resultam em erros 42501 (violação de RLS) ou P0001 (Not authenticated).
    */
   async getAuthenticatedUserId(): Promise<string | null> {
-    if (this.cachedUserId) {
-      return this.cachedUserId;
-    }
     const supabase = getSupabase();
     if (!supabase || !isSupabaseConfigured) return null;
 
+    const now = Date.now();
+    if (this.cachedUserId && now < this.cachedSessionValidUntil) {
+      return this.cachedUserId;
+    }
+
     try {
-      const { data: { user }, error } = await supabase.auth.getUser();
-      if (error || !user) {
+      const { data: { session }, error } = await supabase.auth.getSession();
+      if (error || !session || !session.user || !session.access_token) {
+        this.cachedUserId = null;
+        this.cachedSessionValidUntil = 0;
         return null;
       }
-      this.cachedUserId = user.id;
-      return user.id;
+
+      const activeUid = session.user.id;
+      if (this.cachedUserId && this.cachedUserId !== activeUid) {
+        console.warn('[SyncEngine] cachedUserId diverge da sessão ativa do Supabase. Sincronização remota ignorada.', {
+          cached: this.cachedUserId,
+          active: activeUid,
+        });
+        return null;
+      }
+
+      this.cachedUserId = activeUid;
+      this.cachedSessionValidUntil = now + 5000;
+      return activeUid;
     } catch (err) {
-      console.error('[SyncEngine] Falha ao verificar sessão do Supabase:', err);
+      this.cachedUserId = null;
+      this.cachedSessionValidUntil = 0;
       return null;
     }
   }
@@ -332,7 +353,10 @@ class SyncEngineClass {
           if (!error && data && data.id === canonicalId && isDeletedSuccess) {
             this.lastSyncedNodeTime.set(effectiveNode.id, data.updated_at || localUpdatedAt);
             if (effectiveNode.deletedAt) {
-              console.log('[REMOTE WRITE SUCCESS] DELETE', effectiveNode.id);
+              console.log('[REMOTE WRITE SUCCESS] DELETE NODE', {
+                id: effectiveNode.id,
+                nodeId: effectiveNode.id,
+              });
             } else {
               console.log('[REMOTE WRITE SUCCESS] NODE', {
                 id: effectiveNode.id,
@@ -350,6 +374,25 @@ class SyncEngineClass {
             break;
           }
 
+          const isAuthOrRlsError =
+            Boolean(error &&
+            (error.code === '42501' ||
+             error.code === 'P0001' ||
+             error.message?.toLowerCase().includes('violates row-level security policy') ||
+             error.message?.toLowerCase().includes('not authenticated')));
+
+          if (isAuthOrRlsError) {
+            console.warn('[SYNC AUTH/RLS BLOCKED]', {
+              entityType: 'node',
+              entityId: effectiveNode.id,
+              error: error?.message || error,
+              reason: 'Sessão do Supabase ausente, expirada ou não autorizada para esta operação.',
+            });
+            this.cachedUserId = null;
+            this.cachedSessionValidUntil = 0;
+            break;
+          }
+
           console.error('[SYNC FAILED]', {
             entityType: 'node',
             entityId: effectiveNode.id,
@@ -358,12 +401,30 @@ class SyncEngineClass {
             error: error || 'Database returned empty response or unverified payload on node upsert',
           });
         } catch (err: any) {
+          const errMsg = err?.message || String(err);
+          const isAuthOrRlsError =
+            err?.code === '42501' ||
+            err?.code === 'P0001' ||
+            errMsg.toLowerCase().includes('violates row-level security policy') ||
+            errMsg.toLowerCase().includes('not authenticated');
+
+          if (isAuthOrRlsError) {
+            console.warn('[SYNC AUTH/RLS BLOCKED]', {
+              entityType: 'node',
+              entityId: effectiveNode.id,
+              error: errMsg,
+            });
+            this.cachedUserId = null;
+            this.cachedSessionValidUntil = 0;
+            break;
+          }
+
           console.error('[SYNC FAILED]', {
             entityType: 'node',
             entityId: effectiveNode.id,
             attempt,
             maxRetries,
-            error: err?.message || err,
+            error: errMsg,
           });
         }
 
@@ -440,22 +501,24 @@ class SyncEngineClass {
       updatedAt: note.updatedAt,
     });
 
+    // BUG 10 — DELETE SOBERANO
+    // Se o nó já estiver com tombstone (deletedAt), NUNCA enviar a nota como upsert. Sincronizar exclusão.
+    const effectiveNode = node || (await indexedDbService.getNode(note.nodeId));
+    if (effectiveNode && effectiveNode.deletedAt) {
+      console.log('[SyncEngine] Tentativa de syncNote para nó já marcado com deletedAt. Executando delete remoto em vez de upsert.', {
+        noteId: note.id,
+        nodeId: note.nodeId,
+      });
+      await this.syncNode(effectiveNode);
+      return await this.deleteNoteRemote(note.id, note.nodeId);
+    }
+
     // 1. Garante que o node pai exista no Supabase antes da nota para satisfazer a chave estrangeira (FK)
-    let nodeSynced = false;
-    if (node) {
-      nodeSynced = await this.syncNode(node);
-      if (!nodeSynced && !node.deletedAt) {
+    if (effectiveNode) {
+      const nodeSynced = await this.syncNode(effectiveNode);
+      if (!nodeSynced && !effectiveNode.deletedAt) {
         console.warn('[SyncEngine] Node pai não pôde ser sincronizado antes da nota. Abortando envio da nota para evitar erro de FK.');
         return false;
-      }
-    } else {
-      const localNode = await indexedDbService.getNode(note.nodeId);
-      if (localNode) {
-        nodeSynced = await this.syncNode(localNode);
-        if (!nodeSynced && !localNode.deletedAt) {
-          console.warn('[SyncEngine] Node pai não pôde ser sincronizado antes da nota. Abortando envio da nota para evitar erro de FK.');
-          return false;
-        }
       }
     }
 
@@ -485,17 +548,47 @@ class SyncEngineClass {
       });
 
       if (!rpcError && rpcData) {
-        // Status OK: operação atômica confirmada no banco
-        if (rpcData.status === 'ok') {
+        // Log obrigatório do resultado da RPC (BUG 16)
+        console.log('[RPC RESULT]', {
+          status: rpcData.status,
+          noteId: rpcData.note?.id || canonicalNoteId,
+          nodeId: rpcData.note?.node_id || canonicalNodeId,
+          version: rpcData.note?.version || versionNum,
+        });
+
+        // BUG 1 & BUG 2: Aceita tanto 'inserted' quanto 'updated' como sucesso da gravação remota
+        if (rpcData.status === 'inserted' || rpcData.status === 'updated') {
+          const remoteNote = rpcData.note;
+
+          // BUG 3: Validar o resultado real da RPC
+          if (!remoteNote || remoteNote.id !== canonicalNoteId) {
+            console.error('[SYNC FAILED]', {
+              entityType: 'note',
+              entityId: canonicalNoteId,
+              error: `RPC returned note ID mismatch or invalid payload. Expected ${canonicalNoteId}, got ${remoteNote?.id}`,
+              status: rpcData.status,
+            });
+            return false;
+          }
+
+          if (remoteNote.version && Number(remoteNote.version) !== note.version) {
+            note.version = Number(remoteNote.version);
+            await indexedDbService.saveNote(note);
+          }
+
           console.log('[REMOTE WRITE SUCCESS] NOTE', {
-            id: note.id,
-            nodeId: note.nodeId,
-            version: versionNum,
+            id: canonicalNoteId,
+            nodeId: canonicalNodeId,
+            version: remoteNote.version ?? versionNum,
+            status: rpcData.status,
+            method: 'rpc',
           });
+
           console.log('[SYNC SUCCESS]', {
             entityType: 'note',
             entityId: note.id,
-            version: versionNum,
+            version: remoteNote.version ?? versionNum,
+            status: rpcData.status,
             method: 'rpc',
           });
           return true;
@@ -608,6 +701,24 @@ class SyncEngineClass {
       }
 
       if (rpcError) {
+        const isAuthOrRlsError =
+          rpcError.code === '42501' ||
+          rpcError.code === 'P0001' ||
+          rpcError.message?.toLowerCase().includes('violates row-level security policy') ||
+          rpcError.message?.toLowerCase().includes('not authenticated');
+
+        if (isAuthOrRlsError) {
+          console.warn('[SYNC AUTH/RLS BLOCKED]', {
+            entityType: 'note',
+            entityId: note.id,
+            error: rpcError.message || rpcError,
+            reason: 'Sessão do Supabase ausente, expirada ou não autorizada para esta nota.',
+          });
+          this.cachedUserId = null;
+          this.cachedSessionValidUntil = 0;
+          return false;
+        }
+
         // Verifica estritamente se o erro é de função RPC inexistente no PostgreSQL (código 42883)
         const isFunctionNotFound =
           rpcError.code === '42883' ||
@@ -630,10 +741,28 @@ class SyncEngineClass {
         );
       }
     } catch (err: any) {
+      const errMsg = err?.message || String(err);
+      const isAuthOrRlsError =
+        err?.code === '42501' ||
+        err?.code === 'P0001' ||
+        errMsg.toLowerCase().includes('violates row-level security policy') ||
+        errMsg.toLowerCase().includes('not authenticated');
+
+      if (isAuthOrRlsError) {
+        console.warn('[SYNC AUTH/RLS BLOCKED]', {
+          entityType: 'note',
+          entityId: note.id,
+          error: errMsg,
+        });
+        this.cachedUserId = null;
+        this.cachedSessionValidUntil = 0;
+        return false;
+      }
+
       console.error('[SYNC FAILED]', {
         entityType: 'note',
         entityId: note.id,
-        error: err?.message || err,
+        error: errMsg,
         method: 'rpc',
       });
       return false;
@@ -649,6 +778,23 @@ class SyncEngineClass {
         .maybeSingle();
 
       if (fetchErr) {
+        const isAuthOrRlsError =
+          fetchErr.code === '42501' ||
+          fetchErr.code === 'P0001' ||
+          fetchErr.message?.toLowerCase().includes('violates row-level security policy') ||
+          fetchErr.message?.toLowerCase().includes('not authenticated');
+
+        if (isAuthOrRlsError) {
+          console.warn('[SYNC AUTH/RLS BLOCKED]', {
+            entityType: 'note',
+            entityId: note.id,
+            error: fetchErr.message || fetchErr,
+          });
+          this.cachedUserId = null;
+          this.cachedSessionValidUntil = 0;
+          return false;
+        }
+
         console.error('[SYNC FAILED]', {
           entityType: 'note',
           entityId: note.id,
@@ -768,6 +914,25 @@ class SyncEngineClass {
         return true;
       }
 
+      if (upsertErr) {
+        const isAuthOrRlsError =
+          upsertErr.code === '42501' ||
+          upsertErr.code === 'P0001' ||
+          upsertErr.message?.toLowerCase().includes('violates row-level security policy') ||
+          upsertErr.message?.toLowerCase().includes('not authenticated');
+
+        if (isAuthOrRlsError) {
+          console.warn('[SYNC AUTH/RLS BLOCKED]', {
+            entityType: 'note',
+            entityId: note.id,
+            error: upsertErr.message || upsertErr,
+          });
+          this.cachedUserId = null;
+          this.cachedSessionValidUntil = 0;
+          return false;
+        }
+      }
+
       console.error('[SYNC FAILED]', {
         entityType: 'note',
         entityId: note.id,
@@ -776,10 +941,28 @@ class SyncEngineClass {
       });
       return false;
     } catch (err: any) {
+      const errMsg = err?.message || String(err);
+      const isAuthOrRlsError =
+        err?.code === '42501' ||
+        err?.code === 'P0001' ||
+        errMsg.toLowerCase().includes('violates row-level security policy') ||
+        errMsg.toLowerCase().includes('not authenticated');
+
+      if (isAuthOrRlsError) {
+        console.warn('[SYNC AUTH/RLS BLOCKED]', {
+          entityType: 'note',
+          entityId: note.id,
+          error: errMsg,
+        });
+        this.cachedUserId = null;
+        this.cachedSessionValidUntil = 0;
+        return false;
+      }
+
       console.error('[SYNC FAILED]', {
         entityType: 'note',
         entityId: note.id,
-        error: err?.message || err,
+        error: errMsg,
         method: 'fallback_exception',
       });
       return false;
@@ -822,6 +1005,144 @@ class SyncEngineClass {
 
     this.emitStatus('saving');
     this.triggerQueueProcessing(50);
+  }
+
+  /**
+   * Enfileira a exclusão remota de uma nota na fila persistente do IndexedDB (BUG 9).
+   * O ID fixo `sync_note_${noteId}` garante substituição soberana sobre qualquer upsert pendente.
+   */
+  async enqueueNoteDelete(noteId: string, nodeId: string, userId: string): Promise<void> {
+    const queueItem: SyncQueueItem = {
+      id: `sync_note_${noteId}`,
+      userId,
+      entityType: 'note',
+      entityId: noteId,
+      operation: 'delete',
+      payload: { noteId, nodeId },
+      version: Date.now(),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      attempts: 0,
+      nextAttemptAt: 0,
+      status: 'pending',
+    };
+
+    try {
+      await indexedDbService.enqueueSyncItem(queueItem);
+    } catch (err) {
+      console.warn('[SyncEngine] Falha ao enfileirar exclusão da nota no IndexedDB:', err);
+    }
+
+    if (!this.isOnline) {
+      this.emitStatus('offline');
+      return;
+    }
+
+    this.emitStatus('saving');
+    this.triggerQueueProcessing(50);
+  }
+
+  /**
+   * Remove fisicamente uma nota do Supabase quando o nó correspondente é excluído (BUG 7 & BUG 8).
+   * Utiliza validação estrita com id, node_id e user_id para segurança e consistência.
+   */
+  async deleteNoteRemote(noteId: string, nodeId: string): Promise<boolean> {
+    const supabase = getSupabase();
+    if (!supabase || !isSupabaseConfigured) return false;
+
+    const authUserId = await this.getAuthenticatedUserId();
+    if (!authUserId) return false;
+
+    const canonicalNoteId = toCanonicalUuid(noteId);
+    const canonicalNodeId = toCanonicalUuid(nodeId);
+
+    try {
+      const { data, error } = await supabase
+        .from('notes')
+        .delete()
+        .eq('id', canonicalNoteId)
+        .eq('node_id', canonicalNodeId)
+        .eq('user_id', authUserId)
+        .select('id');
+
+      if (error) {
+        const isAuthOrRlsError =
+          error.code === '42501' ||
+          error.code === 'P0001' ||
+          error.message?.toLowerCase().includes('violates row-level security policy') ||
+          error.message?.toLowerCase().includes('not authenticated');
+
+        if (isAuthOrRlsError) {
+          console.warn('[SYNC AUTH/RLS BLOCKED]', {
+            entityType: 'note',
+            entityId: canonicalNoteId,
+            error: error.message || error,
+          });
+          this.cachedUserId = null;
+          this.cachedSessionValidUntil = 0;
+          return false;
+        }
+
+        console.error('[SYNC FAILED] DELETE NOTE', {
+          noteId: canonicalNoteId,
+          nodeId: canonicalNodeId,
+          error: error.message || error,
+        });
+        return false;
+      }
+
+      if (data && Array.isArray(data) && data.length > 0 && data[0].id === canonicalNoteId) {
+        console.log('[REMOTE WRITE SUCCESS] DELETE NOTE', {
+          noteId: canonicalNoteId,
+          nodeId: canonicalNodeId,
+        });
+        return true;
+      }
+
+      // Se a linha já não existia no banco, considera excluído com idempotência
+      console.log('[REMOTE DELETE ALREADY ABSENT]', {
+        noteId: canonicalNoteId,
+        nodeId: canonicalNodeId,
+      });
+      return true;
+    } catch (err: any) {
+      console.error('[SYNC FAILED] DELETE NOTE EXCEPTION', {
+        noteId: canonicalNoteId,
+        nodeId: canonicalNodeId,
+        error: err?.message || err,
+      });
+      return false;
+    }
+  }
+
+  /**
+   * Ferramenta de diagnóstico para inspecionar diretamente o estado da nota no Supabase (BUG 17).
+   */
+  async debugRemoteNote(noteId: string): Promise<any> {
+    const supabase = getSupabase();
+    if (!supabase || !isSupabaseConfigured) {
+      console.log('[REMOTE NOTE CHECK] Supabase não está configurado.');
+      return null;
+    }
+    const canonicalId = toCanonicalUuid(noteId);
+    try {
+      const { data, error } = await supabase
+        .from('notes')
+        .select('*')
+        .eq('id', canonicalId)
+        .maybeSingle();
+
+      console.log('[REMOTE NOTE CHECK]', {
+        noteId: canonicalId,
+        data,
+        error: error?.message || error,
+        exists: Boolean(data),
+      });
+      return data;
+    } catch (err: any) {
+      console.error('[REMOTE NOTE CHECK] Falha ao consultar nota no Supabase:', err);
+      return null;
+    }
   }
 
   /**
@@ -895,61 +1216,101 @@ class SyncEngineClass {
             let targetVersionToClear = item.version;
 
             if (item.entityType === 'note') {
-              // 1. Respeita a versão mais recente como soberana: busca o estado atual no IndexedDB
-              const sovereignNote =
-                (await indexedDbService.getNote(item.entityId)) ||
-                (await indexedDbService.getNoteByNodeId(item.entityId));
-              let noteToSync = item.payload?.note as NoteRecord | undefined;
-              const targetNodeId = sovereignNote?.nodeId || noteToSync?.nodeId || item.payload?.node?.id || item.entityId;
-              let parentNode = (await indexedDbService.getNode(targetNodeId)) || (item.payload?.node as TreeNode | undefined);
+              if (item.operation === 'delete') {
+                const noteId = item.payload?.noteId || item.entityId;
+                const nodeId = item.payload?.nodeId || item.entityId;
+                const localNode = await indexedDbService.getNode(nodeId);
 
-              if (sovereignNote) {
-                const sovereignVersion = Number(sovereignNote.version || 1);
-                const queueVersion = Number(noteToSync?.version || 1);
-                const sovereignTime = new Date(sovereignNote.updatedAt || 0).getTime();
-                const queueTime = new Date(noteToSync?.updatedAt || 0).getTime();
-
-                if (sovereignVersion > queueVersion || (sovereignVersion === queueVersion && sovereignTime > queueTime)) {
-                  console.log('[QUEUE SOVEREIGN REFRESH]', {
-                    entityType: 'note',
-                    entityId: item.entityId,
-                    queueVersion,
-                    sovereignVersion,
-                    queueTime,
-                    sovereignTime,
-                    action: 'Promoting latest local IndexedDB note to sovereign sync target',
-                  });
-                  noteToSync = sovereignNote;
-                  targetVersionToClear = sovereignVersion;
-                } else if (noteToSync) {
-                  targetVersionToClear = queueVersion;
-                }
-              }
-
-              if (noteToSync) {
-                // 2. Garante a dependência NODE -> NOTE antes de persistir a nota no Supabase
-                if (parentNode) {
-                  const nodeSuccess = await this.syncNode(parentNode);
-                  if (!nodeSuccess && !parentNode.deletedAt) {
-                    console.warn('[QUEUE DEPENDENCY BLOCKED]', {
-                      entityType: 'note',
-                      noteId: item.entityId,
-                      nodeId: parentNode.id,
-                      reason: 'Node dependency failed to sync. Note will remain pending.',
+                if (localNode && localNode.deletedAt) {
+                  const nodeSuccess = await this.syncNode(localNode);
+                  if (!nodeSuccess) {
+                    console.warn('[QUEUE DEPENDENCY BLOCKED] Falha ao sincronizar tombstone do node antes do delete da note:', {
+                      nodeId: localNode.id,
+                      noteId,
                     });
                     success = false;
                   } else {
-                    // Node sincronizado com sucesso: conclui o item do nó na fila com sua versão processada (Problema 12)
-                    const nodeVersionToClear = new Date(parentNode.updatedAt || 0).getTime();
-                    await indexedDbService.completeSyncItem(`sync_node_${parentNode.id}`, nodeVersionToClear);
-                    success = await this.syncNote(noteToSync, parentNode);
+                    const nodeVersionToClear = new Date(localNode.updatedAt || 0).getTime();
+                    await indexedDbService.completeSyncItem(`sync_node_${localNode.id}`, nodeVersionToClear);
+                    success = await this.deleteNoteRemote(noteId, nodeId);
                   }
                 } else {
-                  success = await this.syncNote(noteToSync);
+                  success = await this.deleteNoteRemote(noteId, nodeId);
                 }
               } else {
-                console.warn('[QUEUE DISCARD INVALID]', { entityType: 'note', itemId: item.id });
-                success = true; // Payload vazio ou inválido, limpa da fila
+                // 1. Respeita a versão mais recente como soberana: busca o estado atual no IndexedDB
+                const sovereignNote =
+                  (await indexedDbService.getNote(item.entityId)) ||
+                  (await indexedDbService.getNoteByNodeId(item.entityId));
+                let noteToSync = item.payload?.note as NoteRecord | undefined;
+                const targetNodeId = sovereignNote?.nodeId || noteToSync?.nodeId || item.payload?.node?.id || item.entityId;
+                let parentNode = (await indexedDbService.getNode(targetNodeId)) || (item.payload?.node as TreeNode | undefined);
+
+                // BUG 10 — DELETE SOBERANO
+                // Se o nó já estiver com tombstone (deletedAt), NUNCA enviar a nota como upsert.
+                if (parentNode && parentNode.deletedAt) {
+                  console.log('[QUEUE DELETE SOVEREIGN] Node pai marcado com deletedAt. Convertendo upsert pendente em exclusão remota.', {
+                    noteId: item.entityId,
+                    nodeId: parentNode.id,
+                  });
+                  const nodeSuccess = await this.syncNode(parentNode);
+                  if (nodeSuccess) {
+                    const nodeVersionToClear = new Date(parentNode.updatedAt || 0).getTime();
+                    await indexedDbService.completeSyncItem(`sync_node_${parentNode.id}`, nodeVersionToClear);
+                    success = await this.deleteNoteRemote(item.entityId, parentNode.id);
+                  } else {
+                    success = false;
+                  }
+                } else {
+                  if (sovereignNote) {
+                    const sovereignVersion = Number(sovereignNote.version || 1);
+                    const queueVersion = Number(noteToSync?.version || 1);
+                    const sovereignTime = new Date(sovereignNote.updatedAt || 0).getTime();
+                    const queueTime = new Date(noteToSync?.updatedAt || 0).getTime();
+
+                    if (sovereignVersion > queueVersion || (sovereignVersion === queueVersion && sovereignTime > queueTime)) {
+                      console.log('[QUEUE SOVEREIGN REFRESH]', {
+                        entityType: 'note',
+                        entityId: item.entityId,
+                        queueVersion,
+                        sovereignVersion,
+                        queueTime,
+                        sovereignTime,
+                        action: 'Promoting latest local IndexedDB note to sovereign sync target',
+                      });
+                      noteToSync = sovereignNote;
+                      targetVersionToClear = sovereignVersion;
+                    } else if (noteToSync) {
+                      targetVersionToClear = queueVersion;
+                    }
+                  }
+
+                  if (noteToSync) {
+                    // 2. Garante a dependência NODE -> NOTE antes de persistir a nota no Supabase
+                    if (parentNode) {
+                      const nodeSuccess = await this.syncNode(parentNode);
+                      if (!nodeSuccess && !parentNode.deletedAt) {
+                        console.warn('[QUEUE DEPENDENCY BLOCKED]', {
+                          entityType: 'note',
+                          noteId: item.entityId,
+                          nodeId: parentNode.id,
+                          reason: 'Node dependency failed to sync. Note will remain pending.',
+                        });
+                        success = false;
+                      } else {
+                        // Node sincronizado com sucesso: conclui o item do nó na fila com sua versão processada (Problema 12)
+                        const nodeVersionToClear = new Date(parentNode.updatedAt || 0).getTime();
+                        await indexedDbService.completeSyncItem(`sync_node_${parentNode.id}`, nodeVersionToClear);
+                        success = await this.syncNote(noteToSync, parentNode);
+                      }
+                    } else {
+                      success = await this.syncNote(noteToSync);
+                    }
+                  } else {
+                    console.warn('[QUEUE DISCARD INVALID]', { entityType: 'note', itemId: item.id });
+                    success = true; // Payload vazio ou inválido, limpa da fila
+                  }
+                }
               }
             } else if (item.entityType === 'node') {
               // 1. Respeita a versão mais recente do node como soberana
@@ -979,6 +1340,11 @@ class SyncEngineClass {
                 success = await this.syncNode(nodeToSync);
                 if (success) {
                   realtimeService.clearPendingLocalNodeUpdate(nodeToSync.id, nodeToSync.updatedAt);
+                  if (nodeToSync.deletedAt && nodeToSync.type === 'note') {
+                    const localNote = await indexedDbService.getNoteByNodeId(nodeToSync.id);
+                    const noteId = localNote?.id || nodeToSync.id;
+                    await this.deleteNoteRemote(noteId, nodeToSync.id);
+                  }
                 }
               } else {
                 console.warn('[QUEUE DISCARD INVALID]', { entityType: 'node', itemId: item.id });
@@ -1032,7 +1398,13 @@ class SyncEngineClass {
                 });
               }
             } else {
-              // Se a operação falhou na verificação do banco, NÃO remove da fila!
+              // Se a operação falhou na verificação do banco, checa se ainda estamos autenticados
+              const stillAuthenticated = await this.getAuthenticatedUserId();
+              if (!stillAuthenticated) {
+                console.warn('[QUEUE PAUSED] Autenticação indisponível no Supabase. Pausando processamento da fila sem descartar itens.');
+                break;
+              }
+
               const attempts = (item.attempts || 0) + 1;
               const backoffMs = Math.min(60000, 1000 * Math.pow(2, attempts));
               const errorMsg = 'Falha de verificação na operação com Supabase';
@@ -1421,6 +1793,11 @@ class SyncEngineClass {
       return false;
     }
 
+    if (userId && userId !== authUserId) {
+      console.warn('[SyncEngine] hydrateFromRemote ignorado: userId diverge da sessão ativa do Supabase.');
+      return false;
+    }
+
     try {
       console.info('[SyncEngine] Iniciando hidratação inicial a partir do Supabase...');
 
@@ -1645,6 +2022,13 @@ class SyncEngineClass {
         // Hidrata notas respeitando Last Write Wins (LWW) e comparação de timestamps
         // Problema 13 & 15: Usa sempre remoteNote.id e remoteNote.node_id canônicos (nunca cria novo ID duplicado)
         for (const d of remoteNotes) {
+          // BUG 10 & 14: Se o node pai estiver marcado como excluído localmente, não ressuscita a nota e remove do Supabase
+          const localParentNode = await indexedDbService.getNode(d.node_id);
+          if (localParentNode && localParentNode.deletedAt) {
+            this.deleteNoteRemote(d.id, d.node_id).catch(() => {});
+            continue;
+          }
+
           const local = await indexedDbService.getNote(d.id);
           const remoteVersion = Number(d.version || 1);
           const remoteTime = new Date(d.updated_at || d.created_at || 0).getTime();
@@ -1745,20 +2129,30 @@ class SyncEngineClass {
         const remoteNodeIdSet = new Set(remoteNodes.map((rn: any) => rn.id));
         for (const localNode of allLocalNodes) {
           if (!remoteNodeIdSet.has(localNode.id) && !localNode.deletedAt) {
-            await this.syncNode(localNode);
+            const ok = await this.syncNode(localNode);
+            if (!ok && !(await this.getAuthenticatedUserId())) {
+              console.warn('[SyncEngine] Sessão de autenticação indisponível durante envio de nós locais. Pausando push.');
+              break;
+            }
           }
         }
 
-        const allLocalNotes = await indexedDbService.getAllNotes(authUserId);
-        const remoteNoteIdSet = new Set(remoteNotes.map((rn: any) => rn.id));
-        const remoteNoteNodeIdSet = new Set(remoteNotes.map((rn: any) => rn.node_id));
-        for (const localNote of allLocalNotes) {
-          if (!remoteNoteIdSet.has(localNote.id) && !remoteNoteNodeIdSet.has(localNote.nodeId)) {
-            const parent = await indexedDbService.getNode(localNote.nodeId);
-            if (parent && !parent.deletedAt) {
-              await this.syncNode(parent);
+        if (await this.getAuthenticatedUserId()) {
+          const allLocalNotes = await indexedDbService.getAllNotes(authUserId);
+          const remoteNoteIdSet = new Set(remoteNotes.map((rn: any) => rn.id));
+          const remoteNoteNodeIdSet = new Set(remoteNotes.map((rn: any) => rn.node_id));
+          for (const localNote of allLocalNotes) {
+            if (!remoteNoteIdSet.has(localNote.id) && !remoteNoteNodeIdSet.has(localNote.nodeId)) {
+              const parent = await indexedDbService.getNode(localNote.nodeId);
+              if (parent && !parent.deletedAt) {
+                await this.syncNode(parent);
+              }
+              const ok = await this.syncNote(localNote);
+              if (!ok && !(await this.getAuthenticatedUserId())) {
+                console.warn('[SyncEngine] Sessão de autenticação indisponível durante envio de notas locais. Pausando push.');
+                break;
+              }
             }
-            await this.syncNote(localNote);
           }
         }
       }

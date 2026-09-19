@@ -477,6 +477,29 @@ export const indexedDbService = {
       req.onsuccess = () => {
         const existing = req.result as SyncQueueItem | undefined;
         if (existing) {
+          // Se o item existente na fila já é DELETE soberano e o novo é UPSERT, descarta o upsert para evitar ressuscitação
+          if (existing.operation === 'delete' && item.operation !== 'delete') {
+            console.warn('[SyncQueue] Ignorando upsert para item já marcado como delete soberano:', targetId);
+            return;
+          }
+
+          // Se a nova operação for DELETE, ela é soberana e sobrescreve qualquer upsert pendente
+          if (item.operation === 'delete') {
+            const updatedItem: SyncQueueItem = {
+              ...existing,
+              ...item,
+              id: targetId,
+              operation: 'delete',
+              status: 'pending',
+              attempts: 0,
+              nextAttemptAt: 0,
+              lastError: undefined,
+              updatedAt: new Date().toISOString(),
+            };
+            store.put(updatedItem);
+            return;
+          }
+
           const newVersion = item.version !== undefined ? Number(item.version) : 0;
           const oldVersion = existing.version !== undefined ? Number(existing.version) : 0;
           if (newVersion >= oldVersion) {

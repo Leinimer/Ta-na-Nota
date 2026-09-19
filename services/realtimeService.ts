@@ -116,7 +116,7 @@ class RealtimeServiceClass {
    * Não cria múltiplas assinaturas nem conexões por nota.
    */
   async subscribe(userId: string): Promise<void> {
-    if (!userId) return;
+    if (!userId || userId.startsWith('local_') || userId === 'demo-user-tactility-1') return;
 
     // Se já estiver ouvindo o mesmo usuário com canal ativo, não recria
     if (this.channel && this.activeUserId === userId) {
