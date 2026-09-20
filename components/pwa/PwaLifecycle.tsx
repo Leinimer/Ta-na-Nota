@@ -29,6 +29,10 @@ export function PwaLifecycle() {
 
           console.info('[PWA REGISTERED]');
 
+          navigator.serviceWorker.ready.then(() => {
+            console.info('[PWA READY]');
+          });
+
           // Monitora atualizações do Service Worker
           registration.addEventListener('updatefound', () => {
             const newWorker = registration.installing;
