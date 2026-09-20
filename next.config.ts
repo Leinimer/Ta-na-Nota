@@ -8,8 +8,7 @@ const withSerwist = withSerwistInit({
   reloadOnOnline: false,
   register: false,
   additionalPrecacheEntries: [
-    { url: '/', revision: 'app-shell-v1' },
-    { url: '/~offline', revision: 'offline-v1' },
+    { url: '/', revision: 'app-shell-v2' },
   ],
 });
 

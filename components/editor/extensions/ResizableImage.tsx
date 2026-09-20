@@ -4,7 +4,7 @@ import { Node, mergeAttributes } from '@tiptap/core';
 import { ReactNodeViewRenderer, NodeViewWrapper, NodeViewProps } from '@tiptap/react';
 import React, { useState, useRef, useEffect } from 'react';
 import { GripVertical } from 'lucide-react';
-import { attachmentService } from '@/services/attachmentService';
+import { attachmentService, subscribeToAttachmentUpdates } from '@/services/attachmentService';
 
 function ResizableImageView({ node, updateAttributes, selected }: NodeViewProps) {
   const [resizing, setResizing] = useState(false);
@@ -18,19 +18,41 @@ function ResizableImageView({ node, updateAttributes, selected }: NodeViewProps)
 
   useEffect(() => {
     let isMounted = true;
-    if (!node.attrs.src) return;
+    const currentSrc = node.attrs.src;
+    if (!currentSrc) {
+      return;
+    }
 
-    attachmentService.resolveImageUrl(node.attrs.src).then((resolved) => {
+    attachmentService.resolveImageUrl(currentSrc).then((resolved) => {
       if (isMounted) {
-        setDisplaySrc(resolved);
+        if (resolved) {
+          setDisplaySrc(resolved);
+        }
+        setIsLoading(false);
+      }
+    });
+
+    const unsubscribe = subscribeToAttachmentUpdates(({ id, storagePath, objectUrl }) => {
+      if (!isMounted) return;
+      if (
+        currentSrc.includes(id) ||
+        currentSrc.includes(storagePath) ||
+        currentSrc === `attachment:${storagePath}` ||
+        currentSrc === `attachment:${id}` ||
+        currentSrc === `attachment-local:${id}` ||
+        storagePath.endsWith(currentSrc) ||
+        (node.attrs.alt && storagePath.includes(node.attrs.alt))
+      ) {
+        setDisplaySrc(objectUrl);
         setIsLoading(false);
       }
     });
 
     return () => {
       isMounted = false;
+      unsubscribe();
     };
-  }, [node.attrs.src]);
+  }, [node.attrs.src, node.attrs.alt]);
 
   // Default initial width is 50%
   const currentWidth = node.attrs.width || '50%';

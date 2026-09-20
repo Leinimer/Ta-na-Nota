@@ -1,8 +1,9 @@
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
 import { indexedDbService } from './indexedDbService';
-import { TreeNode, NoteRecord, TagRecord } from '@/types';
+import { TreeNode, NoteRecord, TagRecord, AttachmentRecord } from '@/types';
 import { RealtimeChannel } from '@supabase/supabase-js';
 import { MarkdownService } from './markdownService';
+import { attachmentService } from './attachmentService';
 
 export type RealtimeEventType = 'INSERT' | 'UPDATE' | 'DELETE';
 
@@ -488,6 +489,9 @@ class RealtimeServiceClass {
 
     await indexedDbService.saveNote(updatedNote);
 
+    // Sincroniza anexos vinculados à nota recebida para disponibilidade offline imediata
+    attachmentService.syncAttachmentsForNote(noteId).catch(() => {});
+
     // 3. Notifica interface (NoteEditor e AppShell)
     this.notifyListeners({
       type: 'note',
@@ -574,7 +578,7 @@ class RealtimeServiceClass {
       await indexedDbService.deleteAttachment(row.id);
     } else {
       const existing = await indexedDbService.getAttachment(row.id);
-      await indexedDbService.saveAttachment({
+      const attRecord: AttachmentRecord = {
         id: row.id,
         userId: row.user_id,
         noteId: row.note_id,
@@ -587,7 +591,13 @@ class RealtimeServiceClass {
         createdAt: row.created_at,
         updatedAt: row.updated_at,
         url: `attachment:${row.storage_path}`,
-      });
+      };
+      await indexedDbService.saveAttachment(attRecord);
+
+      // Baixa o Blob físico imediatamente do Supabase Storage para persistir localmente e exibir a imagem
+      if (!attRecord.localBlob && typeof navigator !== 'undefined' && navigator.onLine) {
+        attachmentService.downloadAttachment(attRecord).catch(() => {});
+      }
     }
 
     this.notifyListeners({

@@ -183,6 +183,8 @@ export function NoteEditor({
           setAttachments(att);
           setTags(MarkdownService.extractTags(note.markdownContent || ''));
         }
+        // Sincroniza e baixa anexos remotos da nota recebida para disponibilidade offline e renderização imediata
+        attachmentService.syncAttachmentsForNote(note.id).catch(() => {});
       } catch (err) {
         console.warn('Error loading note metadata:', err);
       }

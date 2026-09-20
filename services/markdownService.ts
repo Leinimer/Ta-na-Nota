@@ -317,13 +317,35 @@ export class MarkdownService {
         continue;
       }
 
-      // 11. Image: ![alt](url)
-      const imgMatch = line.trim().match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
-      if (imgMatch) {
+      // 11. Image: ![alt](url) - garante extração como nó de imagem mesmo com espaços ou títulos
+      const trimmedLine = line.trim();
+      const imgOnlyMatch = trimmedLine.match(/^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)$/);
+      if (imgOnlyMatch) {
         content.push({
           type: 'image',
-          attrs: { src: imgMatch[2], alt: imgMatch[1] },
+          attrs: { src: imgOnlyMatch[2], alt: imgOnlyMatch[1] },
         });
+        i++;
+        continue;
+      }
+
+      // Se a linha contiver uma ou mais imagens Markdown misturadas no texto
+      if (trimmedLine.includes('![') && trimmedLine.includes('](')) {
+        const parts = trimmedLine.split(/(!\[[^\]]*\]\([^)]+\))/g);
+        for (const part of parts) {
+          const m = part.match(/^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)$/);
+          if (m) {
+            content.push({
+              type: 'image',
+              attrs: { src: m[2], alt: m[1] },
+            });
+          } else if (part.trim()) {
+            content.push({
+              type: 'paragraph',
+              content: this.parseInlineText(part),
+            });
+          }
+        }
         i++;
         continue;
       }
@@ -530,6 +552,13 @@ export class MarkdownService {
     let remaining = text;
 
     while (remaining.length > 0) {
+      // 0. Imagens ![alt](url) não devem ser tokenizadas como links de texto com o nome do arquivo
+      const imgMatch = remaining.match(/^!\[([^\]]*)\]\(([^)]+)\)/);
+      if (imgMatch) {
+        remaining = remaining.slice(imgMatch[0].length);
+        continue;
+      }
+
       // 1. Wiki-link: [[Target Note]]
       const wikiMatch = remaining.match(/^\[\[([^\]]+)\]\]/);
       if (wikiMatch) {

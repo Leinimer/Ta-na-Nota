@@ -1950,7 +1950,7 @@ class SyncEngineClass {
                     continue;
                   }
 
-                  console.log('[ATTACHMENT REMOTE RECORD SUCCESS]', {
+                  console.log('[ATTACHMENT METADATA SUCCESS]', {
                     attachmentId: localAtt.id,
                     noteId: localAtt.noteId,
                   });
