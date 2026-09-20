@@ -21,8 +21,30 @@ export function toCanonicalUuid(id: string | null | undefined): string {
 
 export type SyncErrorType = 'AUTH' | 'RLS' | 'FK' | 'UNIQUE' | 'NETWORK' | 'RPC' | 'VALIDATION' | 'UNKNOWN';
 
+export function isNetworkError(error: any): boolean {
+  if (!error) return false;
+  if (typeof navigator !== 'undefined' && !navigator.onLine) return true;
+  const code = String(error?.code || '');
+  const msg = String(error?.message || error || '').toLowerCase();
+  const details = String(error?.details || '').toLowerCase();
+  return (
+    code === 'XX000' ||
+    msg.includes('failed to fetch') ||
+    msg.includes('network') ||
+    msg.includes('connection') ||
+    msg.includes('timeout') ||
+    msg.includes('abort') ||
+    msg.includes('offline') ||
+    details.includes('failed to fetch') ||
+    details.includes('network')
+  );
+}
+
 export function classifySyncError(error: any): SyncErrorType {
   if (!error) return 'UNKNOWN';
+  if (isNetworkError(error)) {
+    return 'NETWORK';
+  }
   const code = String(error?.code || '');
   const msg = String(error?.message || error || '').toLowerCase();
 
@@ -40,9 +62,6 @@ export function classifySyncError(error: any): SyncErrorType {
   }
   if (code === '42883' || (msg.includes('function') && (msg.includes('does not exist') || msg.includes('could not find')))) {
     return 'RPC';
-  }
-  if (code === 'XX000' || msg.includes('failed to fetch') || msg.includes('network') || msg.includes('connection') || msg.includes('timeout')) {
-    return 'NETWORK';
   }
   if (msg.includes('mismatch') || msg.includes('invalid payload')) {
     return 'VALIDATION';
@@ -82,6 +101,22 @@ class SyncEngineClass {
   private isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
   private isProcessingQueue = false;
   private queueDebounceTimer: NodeJS.Timeout | null = null;
+
+  /**
+   * Lida com desconexão de rede ou Supabase inacessível de forma resiliente.
+   * Não emite erro nem descarta a fila: o IndexedDB permanece como verdade soberana offline.
+   */
+  public handleNetworkDisconnection(context: string, details?: any): void {
+    const wasOnline = this.isOnline;
+    this.isOnline = false;
+    this.emitStatus('offline');
+    if (wasOnline) {
+      console.warn(
+        `[PWA OFFLINE] Sincronização pausada por indisponibilidade de rede (${context}). Fila preservada no IndexedDB:`,
+        details
+      );
+    }
+  }
 
   constructor() {
     if (typeof window !== 'undefined') {
@@ -531,6 +566,13 @@ class SyncEngineClass {
           .eq('id', canonicalId)
           .maybeSingle();
 
+        if (checkError) {
+          if (isNetworkError(checkError) || classifySyncError(checkError) === 'NETWORK') {
+            this.handleNetworkDisconnection('node_conflict_check', checkError);
+            return false;
+          }
+        }
+
         if (!checkError && remoteNode && remoteNode.updated_at) {
           const remoteTime = new Date(remoteNode.updated_at).getTime();
 
@@ -585,7 +627,11 @@ class SyncEngineClass {
             });
           }
         }
-      } catch (conflictCheckErr) {
+      } catch (conflictCheckErr: any) {
+        if (isNetworkError(conflictCheckErr) || classifySyncError(conflictCheckErr) === 'NETWORK') {
+          this.handleNetworkDisconnection('node_conflict_check_exception', conflictCheckErr);
+          return false;
+        }
         console.warn('[SyncEngine] Falha não bloqueante na checagem de conflito do node:', conflictCheckErr);
       }
 
@@ -657,6 +703,14 @@ class SyncEngineClass {
             break;
           }
 
+          if (isNetworkError(error) || classifySyncError(error) === 'NETWORK') {
+            this.handleNetworkDisconnection('node_upsert', {
+              entityId: effectiveNode.id,
+              error: error?.message || error,
+            });
+            break;
+          }
+
           console.error('[SYNC FAILED]', {
             entityType: 'node',
             entityId: effectiveNode.id,
@@ -681,6 +735,14 @@ class SyncEngineClass {
             });
             this.authenticatedSupabaseUserId = null;
             this.cachedSessionValidUntil = 0;
+            break;
+          }
+
+          if (isNetworkError(err) || classifySyncError(err) === 'NETWORK') {
+            this.handleNetworkDisconnection('node_upsert_exception', {
+              entityId: effectiveNode.id,
+              error: errMsg,
+            });
             break;
           }
 
@@ -972,6 +1034,11 @@ class SyncEngineClass {
       }
 
       if (rpcError) {
+        if (isNetworkError(rpcError) || classifySyncError(rpcError) === 'NETWORK') {
+          this.handleNetworkDisconnection('note_rpc', { entityId: note.id, error: rpcError.message || rpcError });
+          return false;
+        }
+
         const isAuthOrRlsError =
           rpcError.code === '42501' ||
           rpcError.code === 'P0001' ||
@@ -1013,6 +1080,11 @@ class SyncEngineClass {
       }
     } catch (err: any) {
       const errMsg = err?.message || String(err);
+      if (isNetworkError(err) || classifySyncError(err) === 'NETWORK') {
+        this.handleNetworkDisconnection('note_rpc_exception', { entityId: note.id, error: errMsg });
+        return false;
+      }
+
       const isAuthOrRlsError =
         err?.code === '42501' ||
         err?.code === 'P0001' ||
@@ -1049,6 +1121,11 @@ class SyncEngineClass {
         .maybeSingle();
 
       if (fetchErr) {
+        if (isNetworkError(fetchErr) || classifySyncError(fetchErr) === 'NETWORK') {
+          this.handleNetworkDisconnection('note_fallback_fetch', { entityId: note.id, error: fetchErr.message || fetchErr });
+          return false;
+        }
+
         const isAuthOrRlsError =
           fetchErr.code === '42501' ||
           fetchErr.code === 'P0001' ||
@@ -1186,6 +1263,11 @@ class SyncEngineClass {
       }
 
       if (upsertErr) {
+        if (isNetworkError(upsertErr) || classifySyncError(upsertErr) === 'NETWORK') {
+          this.handleNetworkDisconnection('note_fallback_upsert', { entityId: note.id, error: upsertErr.message || upsertErr });
+          return false;
+        }
+
         const isAuthOrRlsError =
           upsertErr.code === '42501' ||
           upsertErr.code === 'P0001' ||
@@ -1213,6 +1295,11 @@ class SyncEngineClass {
       return false;
     } catch (err: any) {
       const errMsg = err?.message || String(err);
+      if (isNetworkError(err) || classifySyncError(err) === 'NETWORK') {
+        this.handleNetworkDisconnection('note_fallback_exception', { entityId: note.id, error: errMsg });
+        return false;
+      }
+
       const isAuthOrRlsError =
         err?.code === '42501' ||
         err?.code === 'P0001' ||
@@ -1332,6 +1419,11 @@ class SyncEngineClass {
     const supabase = getSupabase();
     if (!supabase || !isSupabaseConfigured) return false;
 
+    if (!this.isOnline) {
+      this.emitStatus('offline');
+      return false;
+    }
+
     const authUserId = await this.getAuthenticatedUserId();
     if (!authUserId) return false;
 
@@ -1348,6 +1440,15 @@ class SyncEngineClass {
         .select('id');
 
       if (error) {
+        if (isNetworkError(error) || classifySyncError(error) === 'NETWORK') {
+          this.handleNetworkDisconnection('delete_note', {
+            noteId: canonicalNoteId,
+            nodeId: canonicalNodeId,
+            error: error.message || error,
+          });
+          return false;
+        }
+
         const isAuthOrRlsError =
           error.code === '42501' ||
           error.code === 'P0001' ||
@@ -1388,6 +1489,15 @@ class SyncEngineClass {
       });
       return true;
     } catch (err: any) {
+      if (isNetworkError(err) || classifySyncError(err) === 'NETWORK') {
+        this.handleNetworkDisconnection('delete_note_exception', {
+          noteId: canonicalNoteId,
+          nodeId: canonicalNodeId,
+          error: err?.message || err,
+        });
+        return false;
+      }
+
       console.error('[SYNC FAILED] DELETE NOTE EXCEPTION', {
         noteId: canonicalNoteId,
         nodeId: canonicalNodeId,
@@ -1687,9 +1797,11 @@ class SyncEngineClass {
             } else {
               // Se a operação não obteve confirmação, verifica se a rede caiu
               if (!this.isOnline || (typeof navigator !== 'undefined' && !navigator.onLine)) {
-                console.warn('[PWA OFFLINE] Conexão indisponível. Pausando fila sem descartar itens.');
-                this.isOnline = false;
-                this.emitStatus('offline');
+                this.handleNetworkDisconnection('queue_item_offline', {
+                  itemId: item.id,
+                  entityType: item.entityType,
+                  entityId: item.entityId,
+                });
                 break;
               }
 
@@ -1732,24 +1844,13 @@ class SyncEngineClass {
               }
             }
           } catch (err: any) {
-            const errStr = String(err?.message || err).toLowerCase();
-            const isNetworkError =
-              !this.isOnline ||
-              (typeof navigator !== 'undefined' && !navigator.onLine) ||
-              errStr.includes('fetch') ||
-              errStr.includes('network') ||
-              errStr.includes('timeout') ||
-              errStr.includes('abort') ||
-              errStr.includes('connection');
-
-            if (isNetworkError) {
-              console.warn('[PWA OFFLINE] Sincronização pausada por desconexão de rede:', {
+            if (isNetworkError(err) || classifySyncError(err) === 'NETWORK') {
+              this.handleNetworkDisconnection('queue_item_catch', {
                 itemId: item.id,
                 entityType: item.entityType,
                 entityId: item.entityId,
+                error: err?.message || err,
               });
-              this.isOnline = false;
-              this.emitStatus('offline');
               // Mantém item intacto na queue como pending
               break;
             }
@@ -1840,6 +1941,11 @@ class SyncEngineClass {
         return true;
       }
 
+      if (isNetworkError(error) || classifySyncError(error) === 'NETWORK') {
+        this.handleNetworkDisconnection('sync_tag', { tagId: tag.id, error });
+        return false;
+      }
+
       console.error('[SYNC FAILED]', {
         entityType: 'tag',
         entityId: tag.id,
@@ -1847,6 +1953,10 @@ class SyncEngineClass {
       });
       return false;
     } catch (err: any) {
+      if (isNetworkError(err) || classifySyncError(err) === 'NETWORK') {
+        this.handleNetworkDisconnection('sync_tag_exception', { tagId: tag.id, error: err });
+        return false;
+      }
       console.error('[SYNC FAILED]', {
         entityType: 'tag',
         entityId: tag.id,
@@ -1883,6 +1993,10 @@ class SyncEngineClass {
         .eq('note_id', canonicalNoteId);
 
       if (delError) {
+        if (isNetworkError(delError) || classifySyncError(delError) === 'NETWORK') {
+          this.handleNetworkDisconnection('sync_note_tags_delete', { noteId, error: delError });
+          return false;
+        }
         console.error('[SYNC FAILED]', {
           entityType: 'note_tags',
           entityId: noteId,
@@ -1907,6 +2021,10 @@ class SyncEngineClass {
           .select('note_id, tag_id');
 
         if (insError || !insData || insData.length !== rows.length) {
+          if (isNetworkError(insError) || classifySyncError(insError) === 'NETWORK') {
+            this.handleNetworkDisconnection('sync_note_tags_insert', { noteId, error: insError });
+            return false;
+          }
           console.error('[SYNC FAILED]', {
             entityType: 'note_tags',
             entityId: noteId,
@@ -1925,6 +2043,10 @@ class SyncEngineClass {
       });
       return true;
     } catch (err: any) {
+      if (isNetworkError(err) || classifySyncError(err) === 'NETWORK') {
+        this.handleNetworkDisconnection('sync_note_tags_exception', { noteId, error: err });
+        return false;
+      }
       console.error('[SYNC FAILED]', {
         entityType: 'note_tags',
         entityId: noteId,
@@ -1964,6 +2086,10 @@ class SyncEngineClass {
         .eq('source_note_id', canonicalSourceId);
 
       if (delError) {
+        if (isNetworkError(delError) || classifySyncError(delError) === 'NETWORK') {
+          this.handleNetworkDisconnection('sync_note_links_delete', { sourceNoteId, error: delError });
+          return false;
+        }
         console.error('[SYNC FAILED]', {
           entityType: 'note_links',
           entityId: sourceNoteId,
@@ -1990,6 +2116,10 @@ class SyncEngineClass {
           .select('id');
 
         if (insError || !insData || insData.length !== rows.length) {
+          if (isNetworkError(insError) || classifySyncError(insError) === 'NETWORK') {
+            this.handleNetworkDisconnection('sync_note_links_insert', { sourceNoteId, error: insError });
+            return false;
+          }
           console.error('[SYNC FAILED]', {
             entityType: 'note_links',
             entityId: sourceNoteId,
@@ -2008,6 +2138,10 @@ class SyncEngineClass {
       });
       return true;
     } catch (err: any) {
+      if (isNetworkError(err) || classifySyncError(err) === 'NETWORK') {
+        this.handleNetworkDisconnection('sync_note_links_exception', { sourceNoteId, error: err });
+        return false;
+      }
       console.error('[SYNC FAILED]', {
         entityType: 'note_links',
         entityId: sourceNoteId,
@@ -2166,18 +2300,38 @@ class SyncEngineClass {
 
       // Problema 5: Tratamento individual e isolado de erros por tabela
       if (nodesRes.error) {
+        if (isNetworkError(nodesRes.error) || classifySyncError(nodesRes.error) === 'NETWORK') {
+          this.handleNetworkDisconnection('hydrate_nodes', nodesRes.error);
+          return false;
+        }
         console.error('[HYDRATE ERROR] table: nodes error:', nodesRes.error);
       }
       if (notesRes.error) {
+        if (isNetworkError(notesRes.error) || classifySyncError(notesRes.error) === 'NETWORK') {
+          this.handleNetworkDisconnection('hydrate_notes', notesRes.error);
+          return false;
+        }
         console.error('[HYDRATE ERROR] table: notes error:', notesRes.error);
       }
       if (tagsRes.error) {
+        if (isNetworkError(tagsRes.error) || classifySyncError(tagsRes.error) === 'NETWORK') {
+          this.handleNetworkDisconnection('hydrate_tags', tagsRes.error);
+          return false;
+        }
         console.error('[HYDRATE ERROR] table: tags error:', tagsRes.error);
       }
       if (noteTagsRes.error) {
+        if (isNetworkError(noteTagsRes.error) || classifySyncError(noteTagsRes.error) === 'NETWORK') {
+          this.handleNetworkDisconnection('hydrate_note_tags', noteTagsRes.error);
+          return false;
+        }
         console.error('[HYDRATE ERROR] table: note_tags error:', noteTagsRes.error);
       }
       if (linksRes.error) {
+        if (isNetworkError(linksRes.error) || classifySyncError(linksRes.error) === 'NETWORK') {
+          this.handleNetworkDisconnection('hydrate_links', linksRes.error);
+          return false;
+        }
         console.error('[HYDRATE ERROR] table: note_links error:', linksRes.error);
       }
 
@@ -2489,7 +2643,11 @@ class SyncEngineClass {
       this.emitStatus('saved');
       console.info('[SyncEngine] Hidratação inicial concluída com sucesso.');
       return true;
-    } catch (err) {
+    } catch (err: any) {
+      if (isNetworkError(err) || classifySyncError(err) === 'NETWORK') {
+        this.handleNetworkDisconnection('hydrateFromRemote', err);
+        return false;
+      }
       console.error('[SyncEngine] Erro na hidratação remota:', err);
       return false;
     }
