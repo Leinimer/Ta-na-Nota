@@ -60,14 +60,18 @@ export interface NoteLinkRecord {
   createdAt: string;
 }
 
+export type AttachmentStatus = 'pending' | 'uploading' | 'uploaded' | 'failed';
+
 export interface AttachmentRecord {
   id: string;
   userId: string;
   noteId: string;
   fileName: string;
-  storagePath: string;
   mimeType: string;
   fileSize: number;
+  localBlob?: Blob | File | null;
+  storagePath: string;
+  status: AttachmentStatus;
   createdAt: string;
   updatedAt: string;
   url?: string;

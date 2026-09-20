@@ -573,6 +573,7 @@ class RealtimeServiceClass {
     if (payload.eventType === 'DELETE') {
       await indexedDbService.deleteAttachment(row.id);
     } else {
+      const existing = await indexedDbService.getAttachment(row.id);
       await indexedDbService.saveAttachment({
         id: row.id,
         userId: row.user_id,
@@ -581,6 +582,8 @@ class RealtimeServiceClass {
         storagePath: row.storage_path,
         mimeType: row.mime_type,
         fileSize: row.file_size,
+        localBlob: existing?.localBlob || null,
+        status: 'uploaded',
         createdAt: row.created_at,
         updatedAt: row.updated_at,
         url: `attachment:${row.storage_path}`,

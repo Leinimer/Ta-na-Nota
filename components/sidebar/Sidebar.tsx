@@ -766,7 +766,7 @@ export function Sidebar({
             )}
             {syncStatus === 'offline' && (
               <span className="flex items-center gap-1.5 text-[11px] text-[#8C7B6E]" title="Suas alterações continuam sendo salvas neste dispositivo">
-                <WifiOff className="w-3.5 h-3.5" /> Offline — salvo localmente
+                <WifiOff className="w-3.5 h-3.5" /> Offline — salvo neste dispositivo
               </span>
             )}
             {syncStatus === 'error' && (

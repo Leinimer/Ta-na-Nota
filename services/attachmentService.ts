@@ -1,6 +1,7 @@
 import { AttachmentRecord } from '@/types';
 import { indexedDbService } from './indexedDbService';
 import { getSupabase, isSupabaseConfigured } from '@/lib/supabase/client';
+import { syncEngine } from './syncEngine';
 
 // ====================================================================
 // STORAGE PROVIDER ABSTRACTION
@@ -217,7 +218,12 @@ export const attachmentService = {
   },
 
   /**
-   * Resolve uma referência de imagem (attachment:path ou URL remota) para uma URL assinada válida.
+   * Resolve uma referência de imagem (attachment:path ou URL remota) para uma URL válida.
+   * Prioridade:
+   * 1. Object URL em memória (se já criada nesta sessão)
+   * 2. Blob local salvo no IndexedDB (Offline-First garantido!)
+   * 3. Download autenticado do Supabase Storage -> cache no IndexedDB para persistência offline futura
+   * 4. Signed URL temporária do Storage Provider
    * NUNCA retorna Base64 para armazenar no documento.
    */
   async resolveImageUrl(src: string): Promise<string> {
@@ -229,6 +235,12 @@ export const attachmentService = {
     let storagePath: string | null = null;
     if (src.startsWith('attachment:')) {
       storagePath = src.replace(/^attachment:/, '');
+    } else if (src.startsWith('attachment-local:')) {
+      const localId = src.replace(/^attachment-local:/, '');
+      const att = await indexedDbService.getAttachment(localId);
+      if (att) {
+        storagePath = att.storagePath;
+      }
     } else if (src.includes('/storage/v1/object/')) {
       const match = src.match(/\/attachments\/([^?#]+)/);
       if (match && match[1]) {
@@ -248,47 +260,90 @@ export const attachmentService = {
       }
     }
 
-    // 1. Verifica cache em memória de URLs assinadas
+    // 1. Verifica cache em memória de URLs de Blob local
+    const localBlobMem = localBlobUrlCache.get(storagePath);
+    if (localBlobMem) {
+      return localBlobMem;
+    }
+
+    // 2. Verifica se temos o Blob salvo no IndexedDB localmente (Offline First!)
+    try {
+      const local = await indexedDbService.getAttachmentByStoragePath(storagePath);
+      if (local?.localBlob) {
+        const objectUrl = URL.createObjectURL(local.localBlob);
+        localBlobUrlCache.set(storagePath, objectUrl);
+        return objectUrl;
+      }
+    } catch (err) {
+      console.warn('[AttachmentService] Erro ao ler localBlob do IndexedDB:', err);
+    }
+
+    // 3. Verifica cache em memória de URLs assinadas
     const cached = signedUrlCache.get(storagePath);
     if (cached && cached.expiresAt > Date.now()) {
       return cached.url;
     }
 
-    // 2. Verifica se há uma URL de objeto local temporária em memória (ex: offline recente)
-    const localBlob = localBlobUrlCache.get(storagePath);
-    if (localBlob) {
-      return localBlob;
-    }
+    // 4. Se estiver online e não tiver Blob local, faz download do Storage para armazenar em cache no IndexedDB!
+    const supabase = getSupabase();
+    if (supabase && isSupabaseConfigured && typeof navigator !== 'undefined' && navigator.onLine) {
+      try {
+        console.log('[ATTACHMENT DOWNLOAD START]', { storagePath });
+        const { data: blob, error: dlError } = await supabase.storage
+          .from('attachments')
+          .download(storagePath);
 
-    // 3. Gera Signed URL no Provider de Storage (Supabase Storage)
-    const { signedUrl, error } = await currentProvider.createSignedUrl(storagePath, 7200); // 2 horas
-    if (!error && signedUrl) {
-      signedUrlCache.set(storagePath, {
-        url: signedUrl,
-        expiresAt: Date.now() + 6600 * 1000, // renova com folga
-      });
-      return signedUrl;
-    }
+        if (!dlError && blob) {
+          console.log('[ATTACHMENT DOWNLOAD SUCCESS]', { storagePath, size: blob.size });
+          const objectUrl = URL.createObjectURL(blob);
+          localBlobUrlCache.set(storagePath, objectUrl);
 
-    // 4. Fallback para cache local no IndexedDB
-    try {
-      const local = await indexedDbService.getAttachmentByStoragePath(storagePath);
-      if (local && local.url && local.url.startsWith('blob:')) {
-        return local.url;
+          // Salva no IndexedDB para que o outro dispositivo consiga abrir offline posteriormente!
+          try {
+            const existing = await indexedDbService.getAttachmentByStoragePath(storagePath);
+            if (existing) {
+              existing.localBlob = blob;
+              await indexedDbService.saveAttachment(existing);
+            }
+          } catch (saveErr) {
+            console.warn('[AttachmentService] Erro ao salvar blob baixado no IndexedDB:', saveErr);
+          }
+
+          return objectUrl;
+        } else if (dlError) {
+          console.warn('[ATTACHMENT DOWNLOAD FAILED]', { storagePath, error: dlError.message });
+        }
+      } catch (dlCatch: any) {
+        console.warn('[ATTACHMENT DOWNLOAD FAILED]', { storagePath, error: dlCatch?.message || dlCatch });
       }
-    } catch {
-      // ignore
+
+      // Fallback para Signed URL
+      try {
+        const { signedUrl, error: signedErr } = await currentProvider.createSignedUrl(storagePath, 7200);
+        if (!signedErr && signedUrl) {
+          signedUrlCache.set(storagePath, {
+            url: signedUrl,
+            expiresAt: Date.now() + 6600 * 1000,
+          });
+          return signedUrl;
+        }
+      } catch (signedErr) {
+        console.warn('[AttachmentService] Erro ao gerar Signed URL:', signedErr);
+      }
     }
 
     return src;
   },
 
   /**
-   * Realiza upload de arquivo (imagem ou PDF).
-   * Garante que:
-   * 1. O arquivo físico vá para o Storage.
-   * 2. Os metadados vão para public.attachments no Supabase.
-   * 3. O retorno SEMPRE possui url no formato 'attachment:storagePath', NUNCA Base64.
+   * Realiza criação/upload de anexo de forma 100% Offline-First.
+   * Fluxo:
+   * 1. Otimiza arquivo (se for imagem compatível).
+   * 2. Cria path determinístico e URL de referência limpa: `attachment:<userId>/<noteId>/<attachmentId>-<fileName>`.
+   * 3. Cria Object URL imediata em memória para o editor não travar a digitação.
+   * 4. Salva o Blob/File físico no IndexedDB local com status 'pending' (NUNCA Base64).
+   * 5. Enfileira operação na `sync_queue` para o SyncEngine processar em background (online ou na reconexão).
+   * 6. Dispara o SyncEngine se a rede estiver disponível.
    */
   async uploadAttachment(
     userId: string,
@@ -300,55 +355,18 @@ export const attachmentService = {
 
     const id = crypto.randomUUID();
     const cleanFileName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
-    const storagePath = `${userId}/${noteId}/${Date.now()}_${cleanFileName}`;
+    // Estrutura determinística: <userId>/<noteId>/<attachmentId>-<fileName>
+    const storagePath = `${userId}/${noteId}/${id}-${cleanFileName}`;
     const referenceUrl = `attachment:${storagePath}`;
 
-    // Cria object URL temporária para visualização instantânea no editor enquanto faz o upload
+    // Cria object URL temporária para visualização instantânea sem atraso
     if (typeof URL !== 'undefined' && URL.createObjectURL) {
       const objectUrl = URL.createObjectURL(file);
       localBlobUrlCache.set(storagePath, objectUrl);
+      localBlobUrlCache.set(id, objectUrl);
     }
 
-    // 2. Envia para o Storage Provider
-    const { error: uploadErr } = await currentProvider.upload({
-      storagePath,
-      file,
-      mimeType: file.type,
-      userId,
-    });
-
-    if (!uploadErr) {
-      // Gera signed URL para exibição segura e limpa o fallback temporário
-      const { signedUrl } = await currentProvider.createSignedUrl(storagePath, 7200);
-      if (signedUrl) {
-        signedUrlCache.set(storagePath, {
-          url: signedUrl,
-          expiresAt: Date.now() + 6600 * 1000,
-        });
-      }
-
-      // 3. Persiste APENAS metadados na tabela public.attachments (NUNCA conteúdo binário)
-      const supabase = getSupabase();
-      if (supabase && isSupabaseConfigured) {
-        try {
-          await supabase.from('attachments').insert({
-            id,
-            user_id: userId,
-            note_id: noteId,
-            file_name: file.name,
-            file_size: file.size,
-            mime_type: file.type,
-            storage_path: storagePath,
-          });
-        } catch (dbErr) {
-          console.warn('[AttachmentService] Erro ao persistir metadados em public.attachments:', dbErr);
-        }
-      }
-    } else {
-      console.warn('[AttachmentService] Upload remoto falhou ou offline; mantendo anexo em cache local:', uploadErr.message);
-    }
-
-    // 4. Salva registro no IndexedDB local com referência limpa (SEM Base64)
+    // 2. Salva registro com o Blob nativo no IndexedDB
     const attachment: AttachmentRecord = {
       id,
       userId,
@@ -357,45 +375,134 @@ export const attachmentService = {
       storagePath,
       mimeType: file.type,
       fileSize: file.size,
+      localBlob: file,
+      status: 'pending',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      url: referenceUrl, // Sempre 'attachment:...'
+      url: referenceUrl,
     };
 
     await indexedDbService.saveAttachment(attachment);
+
+    console.log('[ATTACHMENT LOCAL SAVE]', {
+      id,
+      noteId,
+      fileName: file.name,
+      size: file.size,
+      mimeType: file.type,
+      status: 'pending',
+    });
+
+    // 3. Enfileira na sync_queue para envio quando online
+    await indexedDbService.enqueueSyncItem({
+      id: `sync_attachment_${id}`,
+      userId,
+      entityType: 'attachment',
+      entityId: id,
+      operation: 'upsert',
+      payload: {
+        attachmentId: id,
+        noteId,
+        storagePath,
+        fileName: file.name,
+        mimeType: file.type,
+        fileSize: file.size,
+      },
+      version: 1,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      attempts: 0,
+      nextAttemptAt: 0,
+      status: 'pending',
+    });
+
+    console.log('[ATTACHMENT QUEUED]', {
+      id,
+      storagePath,
+    });
+
+    // 4. Se estiver online, dispara processamento da fila em background
+    if (typeof navigator !== 'undefined' && navigator.onLine) {
+      syncEngine.triggerQueueProcessing(50);
+    }
+
     return attachment;
   },
 
   async deleteAttachment(id: string): Promise<void> {
+    // 1. Remove upload pendente da fila de sincronização
+    await indexedDbService.removeSyncItem(`sync_attachment_${id}`);
+
     const att = await indexedDbService.getAttachment(id);
     if (att && att.storagePath) {
-      await currentProvider.delete(att.storagePath);
-      const supabase = getSupabase();
-      if (supabase && isSupabaseConfigured) {
-        await supabase.from('attachments').delete().eq('id', id);
+      localBlobUrlCache.delete(att.storagePath);
+      signedUrlCache.delete(att.storagePath);
+
+      if (typeof navigator !== 'undefined' && navigator.onLine) {
+        try {
+          await currentProvider.delete(att.storagePath);
+          const supabase = getSupabase();
+          if (supabase && isSupabaseConfigured) {
+            await supabase.from('attachments').delete().eq('id', id);
+          }
+        } catch (err) {
+          console.warn('[AttachmentService] Falha ao deletar remoto imediatamente, enfileirando delete:', err);
+          await indexedDbService.enqueueSyncItem({
+            id: `sync_attachment_${id}`,
+            userId: att.userId,
+            entityType: 'attachment',
+            entityId: id,
+            operation: 'delete',
+            payload: { storagePath: att.storagePath, id },
+            version: 1,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            attempts: 0,
+            nextAttemptAt: 0,
+            status: 'pending',
+          });
+        }
+      } else {
+        // Se offline e o arquivo já tinha sido enviado antes para o remoto:
+        if (att.status === 'uploaded') {
+          await indexedDbService.enqueueSyncItem({
+            id: `sync_attachment_${id}`,
+            userId: att.userId,
+            entityType: 'attachment',
+            entityId: id,
+            operation: 'delete',
+            payload: { storagePath: att.storagePath, id },
+            version: 1,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            attempts: 0,
+            nextAttemptAt: 0,
+            status: 'pending',
+          });
+        }
       }
     }
+
+    localBlobUrlCache.delete(id);
     await indexedDbService.deleteAttachment(id);
   },
 
   /**
-   * Exclui anexos vinculados a uma nota quando ela for excluída definitivamente
+   * Exclui anexos vinculados a uma nota quando ela for excluída definitivamente.
+   * Limpa fila de sync, storage e IndexedDB.
    */
   async deleteAttachmentsForNote(noteId: string): Promise<void> {
     const attachments = await indexedDbService.getAttachments(noteId);
     for (const att of attachments) {
       try {
-        if (att.storagePath) {
-          await currentProvider.delete(att.storagePath);
-        }
-        await indexedDbService.deleteAttachment(att.id);
+        await this.deleteAttachment(att.id);
       } catch (err) {
         console.warn(`[AttachmentService] Erro ao limpar anexo ${att.id}:`, err);
       }
     }
 
     const supabase = getSupabase();
-    if (supabase && isSupabaseConfigured) {
+    if (supabase && isSupabaseConfigured && typeof navigator !== 'undefined' && navigator.onLine) {
       try {
         await supabase.from('attachments').delete().eq('note_id', noteId);
       } catch (err) {
@@ -403,4 +510,30 @@ export const attachmentService = {
       }
     }
   },
+
+  /**
+   * Limpa anexos órfãos que foram removidos do conteúdo da nota pelo usuário.
+   */
+  async cleanupUnusedAttachments(noteId: string, currentMarkdown: string, currentEditorJson: any): Promise<void> {
+    try {
+      const attachments = await indexedDbService.getAttachments(noteId);
+      if (attachments.length === 0) return;
+
+      const editorString = JSON.stringify(currentEditorJson || '');
+      const markdownString = currentMarkdown || '';
+
+      for (const att of attachments) {
+        const isReferencedInMarkdown = markdownString.includes(att.storagePath) || (att.url && markdownString.includes(att.url));
+        const isReferencedInJson = editorString.includes(att.storagePath) || (att.url && editorString.includes(att.url));
+
+        if (!isReferencedInMarkdown && !isReferencedInJson) {
+          console.log('[ATTACHMENT ORPHAN REMOVED]', { noteId, attachmentId: att.id, storagePath: att.storagePath });
+          await this.deleteAttachment(att.id);
+        }
+      }
+    } catch (err) {
+      console.warn('[AttachmentService] Erro ao limpar anexos órfãos:', err);
+    }
+  },
 };
+

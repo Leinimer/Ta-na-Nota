@@ -204,6 +204,8 @@ export function NoteEditor({
       saveTimerRef.current = setTimeout(async () => {
         try {
           const savedNote = await onSaveContent(node.id, md, json);
+          // Limpa anexos que foram excluídos pelo usuário no editor
+          attachmentService.cleanupUnusedAttachments(note.id, md, json).catch(() => {});
           if (savedNote) {
             lastPersistedMarkdownRef.current = savedNote.markdownContent || md;
             lastPersistedVersionRef.current = savedNote.version || (lastPersistedVersionRef.current + 1);
@@ -235,7 +237,7 @@ export function NoteEditor({
         }
       }, 400);
     },
-    [node.id, onSaveContent]
+    [node.id, note.id, onSaveContent]
   );
 
   // Tiptap Editor Initialization

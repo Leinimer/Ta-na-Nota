@@ -1763,6 +1763,214 @@ class SyncEngineClass {
               } else {
                 success = true;
               }
+            } else if (item.entityType === 'attachment') {
+              const supabase = getSupabase();
+              if (!supabase || !isSupabaseConfigured) {
+                success = false;
+              } else if (item.operation === 'delete') {
+                const storagePath = item.payload?.storagePath;
+                const attachmentId = item.entityId;
+
+                if (storagePath) {
+                  try {
+                    await supabase.storage.from('attachments').remove([storagePath]);
+                  } catch (stErr) {
+                    console.warn('[ATTACHMENT REMOTE DELETE WARNING]', stErr);
+                  }
+                }
+
+                const { error: delErr } = await supabase
+                  .from('attachments')
+                  .delete()
+                  .eq('id', attachmentId)
+                  .eq('user_id', authUserId);
+
+                if (delErr && !isNetworkError(delErr)) {
+                  console.warn('[ATTACHMENT DB DELETE WARNING]', delErr);
+                }
+
+                await indexedDbService.deleteAttachment(attachmentId);
+                success = true;
+                targetVersionToClear = item.version;
+              } else {
+                // Operação: upsert (upload físico + persistência no banco)
+                const attachmentId = item.entityId;
+                const noteId = item.payload?.noteId;
+
+                // 1. Se a nota foi excluída offline, descarta upload de anexo órfão (Requirement 19)
+                if (noteId) {
+                  const localNote = await indexedDbService.getNote(noteId);
+                  const localNode = localNote ? await indexedDbService.getNode(localNote.nodeId) : null;
+                  if (!localNote || (localNode && localNode.deletedAt)) {
+                    console.log('[ATTACHMENT DISCARD ORPHAN]', { attachmentId, noteId });
+                    await indexedDbService.deleteAttachment(attachmentId);
+                    success = true;
+                    targetVersionToClear = item.version;
+                    await indexedDbService.completeSyncItem(item.id, targetVersionToClear);
+                    continue;
+                  }
+
+                  // 2. Respeita dependência NODE -> NOTE -> ATTACHMENT (Requirement 18)
+                  const { data: remoteNote, error: checkNoteErr } = await supabase
+                    .from('notes')
+                    .select('id')
+                    .eq('id', noteId)
+                    .maybeSingle();
+
+                  if (checkNoteErr && (isNetworkError(checkNoteErr) || classifySyncError(checkNoteErr) === 'NETWORK')) {
+                    this.handleNetworkDisconnection('check_parent_note_offline', { noteId, attachmentId });
+                    success = false;
+                    break;
+                  }
+
+                  if (!remoteNote) {
+                    console.log('[ATTACHMENT DEPENDENCY PENDING] Sincronizando nó e nota pai antes do upload do anexo:', { noteId, attachmentId });
+                    if (localNode && !localNode.deletedAt) {
+                      await this.syncNode(localNode);
+                    }
+                    const noteSynced = await this.syncNote(localNote, localNode || undefined);
+                    if (!noteSynced) {
+                      console.warn('[ATTACHMENT DEPENDENCY BLOCKED] Falha ao sincronizar nota pai antes do anexo:', { noteId, attachmentId });
+                      success = false;
+                      continue;
+                    }
+                  }
+                }
+
+                const localAtt = await indexedDbService.getAttachment(attachmentId);
+                if (!localAtt) {
+                  console.warn('[ATTACHMENT DISCARD INVALID] Anexo não encontrado no IndexedDB:', attachmentId);
+                  success = true;
+                  targetVersionToClear = item.version;
+                  await indexedDbService.completeSyncItem(item.id, targetVersionToClear);
+                  continue;
+                }
+
+                if (localAtt.status === 'uploaded') {
+                  const { data: remoteAtt } = await supabase
+                    .from('attachments')
+                    .select('id')
+                    .eq('id', attachmentId)
+                    .maybeSingle();
+                  if (remoteAtt) {
+                    success = true;
+                    targetVersionToClear = item.version;
+                    await indexedDbService.completeSyncItem(item.id, targetVersionToClear);
+                    continue;
+                  }
+                }
+
+                console.log('[ATTACHMENT UPLOAD START]', {
+                  attachmentId: localAtt.id,
+                  fileName: localAtt.fileName,
+                  storagePath: localAtt.storagePath,
+                  fileSize: localAtt.fileSize,
+                  mimeType: localAtt.mimeType,
+                });
+
+                localAtt.status = 'uploading';
+                localAtt.updatedAt = new Date().toISOString();
+                await indexedDbService.saveAttachment(localAtt);
+
+                const fileToUpload = localAtt.localBlob;
+                if (!fileToUpload) {
+                  console.warn('[ATTACHMENT UPLOAD FAILED] localBlob ausente para anexo:', attachmentId);
+                  localAtt.status = 'failed';
+                  await indexedDbService.saveAttachment(localAtt);
+                  success = false;
+                  continue;
+                }
+
+                try {
+                  const { error: uploadError } = await supabase.storage
+                    .from('attachments')
+                    .upload(localAtt.storagePath, fileToUpload, {
+                      contentType: localAtt.mimeType,
+                      upsert: true,
+                    });
+
+                  if (uploadError) {
+                    console.error('[ATTACHMENT UPLOAD FAILED]', {
+                      attachmentId: localAtt.id,
+                      storagePath: localAtt.storagePath,
+                      error: uploadError.message,
+                    });
+
+                    if (isNetworkError(uploadError)) {
+                      this.handleNetworkDisconnection('upload_attachment', { attachmentId: localAtt.id, error: uploadError.message });
+                      localAtt.status = 'failed';
+                      await indexedDbService.saveAttachment(localAtt);
+                      success = false;
+                      break;
+                    }
+
+                    localAtt.status = 'failed';
+                    await indexedDbService.saveAttachment(localAtt);
+                    success = false;
+                    continue;
+                  }
+
+                  console.log('[ATTACHMENT UPLOAD SUCCESS]', {
+                    attachmentId: localAtt.id,
+                    storagePath: localAtt.storagePath,
+                  });
+
+                  // 3. Persiste metadados na tabela public.attachments (NUNCA Base64)
+                  const { error: dbError } = await supabase
+                    .from('attachments')
+                    .upsert({
+                      id: localAtt.id,
+                      user_id: authUserId,
+                      note_id: localAtt.noteId,
+                      file_name: localAtt.fileName,
+                      storage_path: localAtt.storagePath,
+                      mime_type: localAtt.mimeType,
+                      file_size: localAtt.fileSize,
+                      created_at: localAtt.createdAt,
+                      updated_at: new Date().toISOString(),
+                    }, { onConflict: 'id' });
+
+                  if (dbError) {
+                    console.error('[ATTACHMENT DB INSERT FAILED]', {
+                      attachmentId: localAtt.id,
+                      error: dbError.message,
+                    });
+
+                    if (isNetworkError(dbError)) {
+                      this.handleNetworkDisconnection('attachment_db_insert', { attachmentId: localAtt.id, error: dbError.message });
+                      localAtt.status = 'failed';
+                      await indexedDbService.saveAttachment(localAtt);
+                      success = false;
+                      break;
+                    }
+
+                    localAtt.status = 'failed';
+                    await indexedDbService.saveAttachment(localAtt);
+                    success = false;
+                    continue;
+                  }
+
+                  console.log('[ATTACHMENT REMOTE RECORD SUCCESS]', {
+                    attachmentId: localAtt.id,
+                    noteId: localAtt.noteId,
+                  });
+
+                  localAtt.status = 'uploaded';
+                  localAtt.updatedAt = new Date().toISOString();
+                  await indexedDbService.saveAttachment(localAtt);
+
+                  success = true;
+                  targetVersionToClear = item.version;
+                } catch (attCatch: any) {
+                  console.error('[ATTACHMENT UPLOAD FAILED]', {
+                    attachmentId: localAtt.id,
+                    error: attCatch?.message || String(attCatch),
+                  });
+                  localAtt.status = 'failed';
+                  await indexedDbService.saveAttachment(localAtt);
+                  success = false;
+                }
+              }
             }
 
             // CRÍTICO: SOMENTE limpa da fila se a operação foi VERIFICADA com sucesso no Supabase!
@@ -2258,7 +2466,7 @@ class SyncEngineClass {
     try {
       console.info('[SyncEngine] Iniciando hidratação inicial a partir do Supabase...');
 
-      const [nodesRes, notesRes, tagsRes, noteTagsRes, linksRes] = await Promise.all([
+      const [nodesRes, notesRes, tagsRes, noteTagsRes, linksRes, attachmentsRes] = await Promise.all([
         supabase
           .from('nodes')
           .select('id, user_id, parent_id, type, name, position, created_at, updated_at, deleted_at')
@@ -2278,6 +2486,10 @@ class SyncEngineClass {
           .eq('user_id', authUserId),
         supabase
           .from('note_links')
+          .select('*')
+          .eq('user_id', authUserId),
+        supabase
+          .from('attachments')
           .select('*')
           .eq('user_id', authUserId),
       ]);
@@ -2600,7 +2812,28 @@ class SyncEngineClass {
         }
       }
 
-      // 6. Envia para o Supabase registros locais criados offline (sem existência no remoto)
+      // 6. Hidrata attachments
+      if (!attachmentsRes.error && attachmentsRes.data) {
+        for (const att of attachmentsRes.data) {
+          const local = await indexedDbService.getAttachment(att.id);
+          await indexedDbService.saveAttachment({
+            id: att.id,
+            userId: att.user_id,
+            noteId: att.note_id,
+            fileName: att.file_name,
+            storagePath: att.storage_path,
+            mimeType: att.mime_type,
+            fileSize: att.file_size,
+            localBlob: local?.localBlob || null,
+            status: 'uploaded',
+            createdAt: att.created_at,
+            updatedAt: att.updated_at,
+            url: `attachment:${att.storage_path}`,
+          });
+        }
+      }
+
+      // 7. Envia para o Supabase registros locais criados offline (sem existência no remoto)
       if (!nodesRes.error && !notesRes.error) {
         const allLocalNodes = await indexedDbService.getAllNodesRaw(authUserId);
         const remoteNodeIdSet = new Set(remoteNodes.map((rn: any) => rn.id));

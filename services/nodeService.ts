@@ -3,6 +3,7 @@ import { indexedDbService } from './indexedDbService';
 import { MarkdownService } from './markdownService';
 import { syncEngine, toCanonicalUuid } from './syncEngine';
 import { realtimeService } from './realtimeService';
+import { attachmentService } from './attachmentService';
 
 export const nodeService = {
   /**
@@ -282,6 +283,7 @@ export const nodeService = {
         if (affected.type === 'note') {
           indexedDbService.getNoteByNodeId(affected.id).then((noteRec) => {
             if (noteRec) {
+              attachmentService.deleteAttachmentsForNote(noteRec.id).catch(() => {});
               syncEngine.enqueueNoteDelete(noteRec.id, affected.id, node.userId).catch((err) => {
                 console.warn('[nodeService] Falha ao enfileirar deleção de nota:', err);
               });
@@ -302,6 +304,7 @@ export const nodeService = {
           noteId: noteRec?.id || node.id,
         });
         if (noteRec) {
+          attachmentService.deleteAttachmentsForNote(noteRec.id).catch(() => {});
           syncEngine.enqueueNoteDelete(noteRec.id, node.id, node.userId).catch((err) => {
             console.warn('[nodeService] Falha ao enfileirar deleção de nota:', err);
           });

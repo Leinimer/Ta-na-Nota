@@ -441,6 +441,37 @@ export const indexedDbService = {
     });
   },
 
+  async deleteAttachmentsByNoteId(noteId: string): Promise<void> {
+    const db = await getDB();
+    const attachments = await this.getAttachments(noteId);
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('attachments', 'readwrite');
+      const store = tx.objectStore('attachments');
+      for (const att of attachments) {
+        store.delete(att.id);
+      }
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
+  async getPendingAttachments(userId: string): Promise<AttachmentRecord[]> {
+    const db = await getDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction('attachments', 'readonly');
+      const req = tx.objectStore('attachments').getAll();
+      req.onsuccess = () => {
+        const list = (req.result || []).filter(
+          (a: AttachmentRecord) =>
+            a.userId === userId &&
+            (a.status === 'pending' || a.status === 'uploading' || a.status === 'failed')
+        );
+        resolve(list);
+      };
+      req.onerror = () => reject(req.error);
+    });
+  },
+
   async getAttachmentByStoragePath(storagePath: string): Promise<AttachmentRecord | null> {
     const db = await getDB();
     return new Promise((resolve) => {
@@ -563,7 +594,8 @@ export const indexedDbService = {
             const bIsDel = b.operation === 'delete' ? 0 : 1;
             if (aIsDel !== bIsDel) return aIsDel - bIsDel;
 
-            const typePriority = (t: string) => (t === 'node' ? 0 : t === 'note' ? 1 : 2);
+            const typePriority = (t: string) =>
+              t === 'node' ? 0 : t === 'note' ? 1 : t === 'attachment' ? 2 : 3;
             const aP = typePriority(a.entityType);
             const bP = typePriority(b.entityType);
             if (aP !== bP) return aP - bP;
