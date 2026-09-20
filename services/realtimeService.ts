@@ -52,6 +52,22 @@ class RealtimeServiceClass {
   private pendingLocalNodeUpdates = new Map<string, string>(); // nodeId -> updatedAt ISO string
   private locallyDeletedNodeIds = new Set<string>(); // nodeIds marcados com tombstone local
 
+  constructor() {
+    if (typeof window !== 'undefined') {
+      window.addEventListener('offline', () => {
+        if (this.channel) {
+          this.unsubscribe().catch(() => {});
+        }
+      });
+
+      window.addEventListener('online', () => {
+        if (this.activeUserId) {
+          this.subscribe(this.activeUserId).catch(() => {});
+        }
+      });
+    }
+  }
+
   /**
    * Registra uma mutação local para que qualquer eco remoto igual ou anterior seja descartado.
    */
@@ -117,6 +133,11 @@ class RealtimeServiceClass {
    */
   async subscribe(userId: string): Promise<void> {
     if (!userId || userId.startsWith('local_') || userId === 'demo-user-tactility-1') return;
+
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      this.activeUserId = userId;
+      return;
+    }
 
     // Se já estiver ouvindo o mesmo usuário com canal ativo, não recria
     if (this.channel && this.activeUserId === userId) {

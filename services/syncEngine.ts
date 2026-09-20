@@ -89,9 +89,15 @@ class SyncEngineClass {
       (window as any).debugSupabaseConnection = () => this.debugSupabaseConnection();
       (window as any).debugCreateRoundTrip = () => this.debugCreateRoundTrip();
 
-      window.addEventListener('online', () => {
-        console.info('[SyncEngine] Conexão restabelecida. Processando fila de sincronização...');
+      window.addEventListener('online', async () => {
         this.isOnline = true;
+        try {
+          const authUserId = this.authenticatedSupabaseUserId || this.localUserId;
+          const count = authUserId ? await indexedDbService.getPendingSyncCount(authUserId) : 0;
+          console.info(`[OFFLINE QUEUE RESUME] Pendentes: ${count}`);
+        } catch {
+          console.info('[OFFLINE QUEUE RESUME] Pendentes: 0');
+        }
         this.triggerQueueProcessing(100);
       });
 
@@ -1424,7 +1430,7 @@ class SyncEngineClass {
   /**
    * Dispara o processamento da fila persistente com debounce para cadenciar as requisições.
    */
-  private triggerQueueProcessing(delayMs: number = 100) {
+  public triggerQueueProcessing(delayMs: number = 100) {
     if (this.queueDebounceTimer) {
       clearTimeout(this.queueDebounceTimer);
     }
@@ -1657,6 +1663,11 @@ class SyncEngineClass {
               );
 
               if (removed) {
+                console.log('[SYNC SUCCESS]', {
+                  itemId: item.id,
+                  entityType: item.entityType,
+                  entityId: item.entityId,
+                });
                 console.log('[QUEUE ITEM COMPLETE]', {
                   itemId: item.id,
                   entityType: item.entityType,
@@ -1674,12 +1685,26 @@ class SyncEngineClass {
                 });
               }
             } else {
+              // Se a operação não obteve confirmação, verifica se a rede caiu
+              if (!this.isOnline || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+                console.warn('[PWA OFFLINE] Conexão indisponível. Pausando fila sem descartar itens.');
+                this.isOnline = false;
+                this.emitStatus('offline');
+                break;
+              }
+
               // Se a operação falhou na verificação do banco, checa se ainda estamos autenticados
               const stillAuthenticated = await this.getAuthenticatedUserId();
               if (!stillAuthenticated) {
                 console.warn('[QUEUE PAUSED] Autenticação indisponível no Supabase. Pausando processamento da fila sem descartar itens.');
                 break;
               }
+
+              console.error('[SYNC FAILED]', {
+                itemId: item.id,
+                entityType: item.entityType,
+                entityId: item.entityId,
+              });
 
               const attempts = (item.attempts || 0) + 1;
               const backoffMs = Math.min(60000, 1000 * Math.pow(2, attempts));
@@ -1707,7 +1732,29 @@ class SyncEngineClass {
               }
             }
           } catch (err: any) {
-            console.error('[QUEUE ITEM EXCEPTION]', {
+            const errStr = String(err?.message || err).toLowerCase();
+            const isNetworkError =
+              !this.isOnline ||
+              (typeof navigator !== 'undefined' && !navigator.onLine) ||
+              errStr.includes('fetch') ||
+              errStr.includes('network') ||
+              errStr.includes('timeout') ||
+              errStr.includes('abort') ||
+              errStr.includes('connection');
+
+            if (isNetworkError) {
+              console.warn('[PWA OFFLINE] Sincronização pausada por desconexão de rede:', {
+                itemId: item.id,
+                entityType: item.entityType,
+                entityId: item.entityId,
+              });
+              this.isOnline = false;
+              this.emitStatus('offline');
+              // Mantém item intacto na queue como pending
+              break;
+            }
+
+            console.error('[SYNC FAILED]', {
               itemId: item.id,
               entityType: item.entityType,
               entityId: item.entityId,

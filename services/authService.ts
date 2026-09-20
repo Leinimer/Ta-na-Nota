@@ -65,6 +65,23 @@ export const authService = {
             return appUser;
           }
 
+          // Se houve erro de rede/conectividade, rede privada bloqueando ou offline:
+          const errMsg = (error?.message || '').toLowerCase();
+          const isNetworkError =
+            errMsg.includes('fetch') ||
+            errMsg.includes('network') ||
+            errMsg.includes('timeout') ||
+            errMsg.includes('abort') ||
+            errMsg.includes('connection');
+
+          if (isNetworkError) {
+            const localUser = await indexedDbService.getLocalUser();
+            if (localUser && localUser.id !== 'demo-user-tactility-1') {
+              console.info('[OFFLINE / NETWORK RESTRICTED SESSION RETAINED]', { userId: localUser.id });
+              return localUser;
+            }
+          }
+
           // Se Supabase está online e não retornou usuário válido com sessão:
           console.warn('[SYNC AUTH UNAVAILABLE]', {
             reason: error?.message || 'No active Supabase session found while online',
@@ -72,14 +89,28 @@ export const authService = {
             hasSession: false,
           });
 
-          // REGRA DEFINITIVA: NUNCA fingir que existe sessão remota usando o IndexedDB localmente quando online
+          // Se estiver offline no momento do retorno, tenta sessão local
+          if (typeof navigator !== 'undefined' && !navigator.onLine) {
+            const localUser = await indexedDbService.getLocalUser();
+            if (localUser && localUser.id !== 'demo-user-tactility-1') {
+              return localUser;
+            }
+          }
+
           return null;
         } catch (err) {
-          console.warn('[SYNC AUTH UNAVAILABLE]', {
+          console.warn('[SYNC AUTH UNAVAILABLE - NETWORK FAILURE]', {
             reason: String(err),
             hasSupabaseClient: true,
             hasSession: false,
           });
+
+          // Em caso de falha de conexão remota (rede restrita, firewall ou offline), preserva sessão local
+          const localUser = await indexedDbService.getLocalUser();
+          if (localUser && localUser.id !== 'demo-user-tactility-1') {
+            console.info('[OFFLINE CACHE LOADED ON NETWORK ERROR]', { userId: localUser.id });
+            return localUser;
+          }
           return null;
         }
       } else {

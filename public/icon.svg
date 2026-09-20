@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="512" height="512" viewBox="0 0 512 512" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#9A8A7D"/>
+      <stop offset="100%" stop-color="#796A5E"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="10.24" stdDeviation="12.8" flood-color="#3D352E" flood-opacity="0.2"/>
+    </filter>
+  </defs>
+
+  <!-- Base background -->
+  
+
+  <!-- Rounded App Icon Tile -->
+  <rect x="40.96" y="40.96" width="430.08" height="430.08" rx="112.64" fill="url(#bgGrad)" filter="url(#shadow)"/>
+  
+  <!-- Subtle inner border -->
+  <rect x="41.96" y="41.96" width="428.08" height="428.08" rx="112.64" fill="none" stroke="#F7F4EE" stroke-width="5.12" stroke-opacity="0.2"/>
+
+  <!-- Note sheet illustration inside -->
+  <g transform="translate(256, 256)">
+    <!-- Stylized 'T' with note ribbon feel -->
+    <path d="M -92.16 -81.92 
+             L 92.16 -81.92 
+             C 102.4 -81.92 112.64 -71.68 112.64 -56.32 
+             C 112.64 -40.96 102.4 -35.84 87.04 -35.84
+             L 25.6 -35.84
+             L 25.6 81.92
+             C 25.6 102.4 10.24 112.64 -10.24 112.64
+             C -30.72 112.64 -35.84 97.28 -35.84 76.8
+             L -35.84 -35.84
+             L -92.16 -35.84
+             C -107.52 -35.84 -117.76 -46.08 -117.76 -61.44
+             C -117.76 -76.8 -107.52 -81.92 -92.16 -81.92 Z" 
+          fill="#F9F7F2"/>
+    
+    <!-- Pen dot accent -->
+    <circle cx="71.68" cy="71.68" r="17.92" fill="#D9C5B2"/>
+  </g>
+</svg>

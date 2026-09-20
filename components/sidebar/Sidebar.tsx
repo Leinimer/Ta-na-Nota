@@ -21,7 +21,9 @@ import {
   X,
   FileText,
   Folder,
+  Download,
 } from 'lucide-react';
+import { usePwaInstall } from '@/components/pwa/usePwaInstall';
 
 type SearchSource = 'folders' | 'notes' | 'tags' | 'content';
 
@@ -90,6 +92,7 @@ export function Sidebar({
   const [isSearching, setIsSearching] = useState(false);
   const [isRootDragOver, setIsRootDragOver] = useState(false);
   const sourceMenuRef = useRef<HTMLDivElement>(null);
+  const { canInstall, installApp } = usePwaInstall();
 
   // Fecha menu de fontes se clicar fora
   useEffect(() => {
@@ -762,8 +765,8 @@ export function Sidebar({
               </span>
             )}
             {syncStatus === 'offline' && (
-              <span className="flex items-center gap-1.5 text-[11px] text-[#8C7B6E]">
-                <WifiOff className="w-3.5 h-3.5" /> Offline
+              <span className="flex items-center gap-1.5 text-[11px] text-[#8C7B6E]" title="Suas alterações continuam sendo salvas neste dispositivo">
+                <WifiOff className="w-3.5 h-3.5" /> Offline — salvo localmente
               </span>
             )}
             {syncStatus === 'error' && (
@@ -773,15 +776,30 @@ export function Sidebar({
             )}
           </div>
 
-          <button
-            id="btn-sidebar-settings"
-            onClick={handleOpenSettingsPanel}
-            title="Ajustes"
-            aria-label="Ajustes"
-            className="p-1.5 text-[#8C7B6E] hover:text-[#3D352E] hover:bg-[#E3DCD2] rounded-md transition-colors cursor-pointer"
-          >
-            <Settings className="w-4 h-4" />
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            {canInstall && (
+              <button
+                id="btn-sidebar-pwa-install"
+                onClick={installApp}
+                title="Instalar aplicativo"
+                aria-label="Instalar aplicativo"
+                className="flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-[#8C7B6E] hover:text-[#3D352E] hover:bg-[#E3DCD2] rounded-md transition-colors cursor-pointer border border-[#E3DCD2]/80 bg-[#FEFDFA]"
+              >
+                <Download className="w-3.5 h-3.5 text-[#8C7B6E]" />
+                <span>Instalar</span>
+              </button>
+            )}
+
+            <button
+              id="btn-sidebar-settings"
+              onClick={handleOpenSettingsPanel}
+              title="Ajustes"
+              aria-label="Ajustes"
+              className="p-1.5 text-[#8C7B6E] hover:text-[#3D352E] hover:bg-[#E3DCD2] rounded-md transition-colors cursor-pointer"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
+          </div>
         </div>
       </div>
     </aside>

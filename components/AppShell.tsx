@@ -374,8 +374,8 @@ export function AppShell() {
 
   useEffect(() => {
     async function initUser() {
-      // Diagnóstico obrigatório de inicialização da configuração do Supabase
-      await syncEngine.runStartupDiagnostic();
+      // Diagnóstico de inicialização da configuração do Supabase sem bloquear UI
+      syncEngine.runStartupDiagnostic().catch(() => {});
 
       try {
         const user = await authService.getCurrentUser();
@@ -385,15 +385,30 @@ export function AppShell() {
           await indexedDbService.migrateLegacyIds(user.id);
           const tombstoneIds = await indexedDbService.getTombstoneNodeIds(user.id);
           realtimeService.loadTombstoneIds(tombstoneIds);
-          await syncEngine.hydrateFromRemote(user.id);
+
+          // 1. CARREGAMENTO OFFLINE-FIRST: renderiza árvore e notas locais do IndexedDB imediatamente
           await refreshAppData(user.id);
+          setIsCheckingAuth(false);
+
+          // 2. Somente depois hidrata e processa fila com o Supabase se houver conexão
+          if (typeof navigator !== 'undefined' && navigator.onLine) {
+            syncEngine
+              .hydrateFromRemote(user.id)
+              .then(async () => {
+                await refreshAppData(user.id);
+                syncEngine.triggerQueueProcessing(100);
+              })
+              .catch((err) => {
+                console.warn('[SyncEngine] Falha ao hidratar do remoto em background:', err);
+              });
+          }
         } else {
           syncEngine.setAuthenticatedUserId(null);
           setCurrentUser(null);
+          setIsCheckingAuth(false);
         }
       } catch (err) {
         console.warn('Erro ao inicializar sessão do usuário:', err);
-      } finally {
         setIsCheckingAuth(false);
       }
     }
