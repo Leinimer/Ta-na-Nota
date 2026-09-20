@@ -219,6 +219,8 @@ function moveNodeInTree(nodes: TreeNode[], targetId: string, newParentId: string
   return insertRecursive(listWithoutNode);
 }
 
+const LAST_ACTIVE_NOTE_KEY = 'ta_na_nota_last_active_node_id';
+
 export function AppShell() {
   const [currentUser, setCurrentUser] = useState<AppUser | null>(null);
   const [tree, setTree] = useState<TreeNode[]>([]);
@@ -256,6 +258,15 @@ export function AppShell() {
     if (node.type === 'folder') return;
     setActiveNode(node);
     setRemoteNoteUpdate(null);
+
+    // Salvar localmente o ID da última nota aberta
+    if (typeof window !== 'undefined') {
+      try {
+        localStorage.setItem(LAST_ACTIVE_NOTE_KEY, node.id);
+      } catch {
+        // ignore
+      }
+    }
 
     try {
       const noteData = await noteService.getNoteByNodeId(node.id);
@@ -295,24 +306,65 @@ export function AppShell() {
       setTree(newTree);
       setTags(newTags);
 
+      const findNoteInTree = (nodes: TreeNode[], id: string): TreeNode | null => {
+        for (const n of nodes) {
+          if (n.id === id && n.type === 'note' && !n.deletedAt) return n;
+          if (n.children && n.children.length > 0) {
+            const found = findNoteInTree(n.children, id);
+            if (found) return found;
+          }
+        }
+        return null;
+      };
+
+      const findFirstNote = (nodes: TreeNode[]): TreeNode | null => {
+        for (const n of nodes) {
+          if (n.type === 'note' && !n.deletedAt) return n;
+          if (n.children && n.children.length > 0) {
+            const child = findFirstNote(n.children);
+            if (child) return child;
+          }
+        }
+        return null;
+      };
+
       // Select initial note if none selected
       if (targetNodeId) {
         selectNodeById(targetNodeId, newTree);
       } else if (!activeNode && newTree.length > 0) {
-        // Find first note
-        const findFirstNote = (nodes: TreeNode[]): TreeNode | null => {
-          for (const n of nodes) {
-            if (n.type === 'note') return n;
-            if (n.children && n.children.length > 0) {
-              const child = findFirstNote(n.children);
-              if (child) return child;
-            }
+        // 1. Verificar se existe uma última nota aberta salva localmente
+        let lastSavedNoteId: string | null = null;
+        if (typeof window !== 'undefined') {
+          try {
+            lastSavedNoteId = localStorage.getItem(LAST_ACTIVE_NOTE_KEY);
+          } catch {
+            lastSavedNoteId = null;
           }
-          return null;
-        };
-        const first = findFirstNote(newTree);
-        if (first) {
-          selectNode(first);
+        }
+
+        // 2. Verificar se ela ainda existe e não está excluída
+        const lastNode = lastSavedNoteId ? findNoteInTree(newTree, lastSavedNoteId) : null;
+        if (lastNode) {
+          // 3. Se existir, selecioná-la e abri-la automaticamente
+          if (lastNode.parentId) {
+            setExpandedFolders((prev) => {
+              const next = new Set(prev);
+              let pId: string | null = lastNode.parentId;
+              while (pId) {
+                next.add(pId);
+                const parentNode = findNodeInTree(newTree, pId);
+                pId = parentNode ? parentNode.parentId : null;
+              }
+              return next;
+            });
+          }
+          selectNode(lastNode);
+        } else {
+          // 4. Se não existir, manter o comportamento atual (primeira nota)
+          const first = findFirstNote(newTree);
+          if (first) {
+            selectNode(first);
+          }
         }
       }
     } catch (err) {
@@ -587,6 +639,18 @@ export function AppShell() {
   const handleDeleteNode = (nodeId: string) => {
     if (!currentUser) return;
     const now = new Date().toISOString();
+
+    // Se a nota excluída for a última ativa salva, limpa o registro local
+    if (typeof window !== 'undefined') {
+      try {
+        const lastSaved = localStorage.getItem(LAST_ACTIVE_NOTE_KEY);
+        if (lastSaved === nodeId) {
+          localStorage.removeItem(LAST_ACTIVE_NOTE_KEY);
+        }
+      } catch {
+        // ignore
+      }
+    }
 
     // 1. Registra no RealtimeService como mutação local com tombstone (evita qualquer eco remoto)
     realtimeService.registerLocalNodeUpdate(nodeId, now, true);
