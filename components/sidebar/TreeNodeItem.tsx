@@ -24,9 +24,11 @@ interface TreeNodeItemProps {
   activeNodeId: string | null;
   expandedFolders: Set<string>;
   editingNodeId?: string | null;
+  selectedNodeIds?: Set<string>;
   onFinishInlineEdit?: () => void;
   onToggleExpand: (folderId: string) => void;
   onSelectNode: (node: TreeNode) => void;
+  onNodeClick?: (node: TreeNode, e: React.MouseEvent) => void;
   onCreateChildNote: (parentId: string) => void;
   onCreateChildFolder: (parentId: string) => void;
   onRenameNode: (nodeId: string, newName: string) => void;
@@ -35,6 +37,7 @@ interface TreeNodeItemProps {
   onToggleFavorite: (nodeId: string) => void;
   onExportNote: (nodeId: string) => void;
   onMoveNode: (draggedId: string, targetParentId: string | null) => void;
+  onMoveMultipleNodes?: (draggedIds: string[], targetParentId: string | null) => void;
 }
 
 export function TreeNodeItem({
@@ -43,9 +46,11 @@ export function TreeNodeItem({
   activeNodeId,
   expandedFolders,
   editingNodeId,
+  selectedNodeIds,
   onFinishInlineEdit,
   onToggleExpand,
   onSelectNode,
+  onNodeClick,
   onCreateChildNote,
   onCreateChildFolder,
   onRenameNode,
@@ -54,6 +59,7 @@ export function TreeNodeItem({
   onToggleFavorite,
   onExportNote,
   onMoveNode,
+  onMoveMultipleNodes,
 }: TreeNodeItemProps) {
   const [isLocalEditing, setIsLocalEditing] = useState(false);
   const isEditing = isLocalEditing || editingNodeId === node.id;
@@ -73,6 +79,7 @@ export function TreeNodeItem({
   const isFolder = node.type === 'folder';
   const isExpanded = expandedFolders.has(node.id);
   const isActive = activeNodeId === node.id;
+  const isSelected = selectedNodeIds ? selectedNodeIds.has(node.id) : false;
 
   const handleFinishRename = () => {
     setIsLocalEditing(false);
@@ -95,7 +102,15 @@ export function TreeNodeItem({
 
   // Drag and drop handlers
   const handleDragStart = (e: React.DragEvent) => {
-    e.dataTransfer.setData('text/plain', node.id);
+    e.stopPropagation();
+    // Se o nó arrastado fizer parte dos selecionados (e houver mais de um selecionado), move o grupo!
+    if (selectedNodeIds && selectedNodeIds.has(node.id) && selectedNodeIds.size > 1) {
+      const idsArray = Array.from(selectedNodeIds);
+      e.dataTransfer.setData('application/json', JSON.stringify({ ids: idsArray }));
+      e.dataTransfer.setData('text/plain', node.id);
+    } else {
+      e.dataTransfer.setData('text/plain', node.id);
+    }
     e.dataTransfer.effectAllowed = 'move';
   };
 
@@ -115,30 +130,59 @@ export function TreeNodeItem({
     e.preventDefault();
     e.stopPropagation();
     setIsDragOver(false);
-    const draggedId = e.dataTransfer.getData('text/plain');
-    if (draggedId && draggedId !== node.id) {
-      if (isFolder) {
-        onMoveNode(draggedId, node.id);
+
+    let multipleIds: string[] | null = null;
+    try {
+      const jsonData = e.dataTransfer.getData('application/json');
+      if (jsonData) {
+        const parsed = JSON.parse(jsonData);
+        if (Array.isArray(parsed.ids)) {
+          multipleIds = parsed.ids;
+        }
+      }
+    } catch {
+      multipleIds = null;
+    }
+
+    const targetParentId = isFolder ? node.id : node.parentId;
+
+    if (multipleIds && multipleIds.length > 0) {
+      if (onMoveMultipleNodes) {
+        onMoveMultipleNodes(multipleIds, targetParentId);
       } else {
-        onMoveNode(draggedId, node.parentId);
+        multipleIds.forEach((id) => {
+          if (id !== node.id) {
+            onMoveNode(id, targetParentId);
+          }
+        });
+      }
+    } else {
+      const draggedId = e.dataTransfer.getData('text/plain');
+      if (draggedId && draggedId !== node.id) {
+        onMoveNode(draggedId, targetParentId);
       }
     }
   };
 
   return (
-    <div className="select-none group/item relative">
+    <div className="select-none group/item relative" data-tree-node-id={node.id}>
       <div
         id={`tree-node-${node.id}`}
+        data-tree-node-id={node.id}
         draggable={!isEditing}
         onDragStart={handleDragStart}
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onDrop={handleDrop}
-        onClick={() => {
-          if (isFolder) {
-            onToggleExpand(node.id);
+        onClick={(e) => {
+          if (onNodeClick) {
+            onNodeClick(node, e);
           } else {
-            onSelectNode(node);
+            if (isFolder) {
+              onToggleExpand(node.id);
+            } else {
+              onSelectNode(node);
+            }
           }
         }}
         style={{ paddingLeft: `${Math.max(8, level * 18 + 8)}px` }}
@@ -147,6 +191,8 @@ export function TreeNodeItem({
           ${
             isActive
               ? 'bg-[#D9C5B2] font-medium text-[#3D352E] border-l-2 border-[#8C7B6E]'
+              : isSelected
+              ? 'bg-[#D9C5B2]/70 font-medium text-[#3D352E] ring-1 ring-[#8C7B6E]/60'
               : 'text-[#3D352E] hover:bg-[#E3DCD2]'
           }
           ${isDragOver ? 'ring-2 ring-[#8C7B6E] bg-[#D9C5B2]/60' : ''}
@@ -338,6 +384,8 @@ export function TreeNodeItem({
               activeNodeId={activeNodeId}
               expandedFolders={expandedFolders}
               editingNodeId={editingNodeId}
+              selectedNodeIds={selectedNodeIds}
+              onNodeClick={onNodeClick}
               onFinishInlineEdit={onFinishInlineEdit}
               onToggleExpand={onToggleExpand}
               onSelectNode={onSelectNode}
@@ -349,6 +397,7 @@ export function TreeNodeItem({
               onToggleFavorite={onToggleFavorite}
               onExportNote={onExportNote}
               onMoveNode={onMoveNode}
+              onMoveMultipleNodes={onMoveMultipleNodes}
             />
           ))}
         </div>

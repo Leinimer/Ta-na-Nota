@@ -11,7 +11,7 @@ import { TaskList } from '@tiptap/extension-task-list';
 import { TaskItem } from '@tiptap/extension-task-item';
 import { Highlight } from '@tiptap/extension-highlight';
 import { Placeholder } from '@tiptap/extension-placeholder';
-import { Details, DetailsContent, DetailsSummary } from '@tiptap/extension-details';
+import { CustomDetails, CustomDetailsContent, DetailsSummary } from './extensions/CustomDetails';
 
 import { TreeNode, NoteRecord, BacklinkItem, AttachmentRecord, SyncStatus } from '@/types';
 import { TextSelection } from '@tiptap/pm/state';
@@ -24,6 +24,9 @@ import { attachmentService } from '@/services/attachmentService';
 import { realtimeService } from '@/services/realtimeService';
 import { DocumentTitle, DocumentTitleContext } from './extensions/DocumentTitle';
 import { ResizableImage } from './extensions/ResizableImage';
+import { ResizableVideo } from './extensions/ResizableVideo';
+import { FileAttachment } from './extensions/FileAttachment';
+import { Plus, Trash2, Columns, Rows, Check } from 'lucide-react';
 
 interface NoteEditorProps {
   node: TreeNode;
@@ -140,29 +143,59 @@ export function NoteEditor({
     return MarkdownService.markdownToVisual(getInitialMarkdown(), node.name ?? '');
   };
 
-  // Handle direct image file upload through storage service (NEVER as Base64 in JSON/Markdown)
-  const handleUploadImage = async (file: File) => {
+  // Handle direct file upload (image, video, pdf, files) through attachment service (NEVER Base64 in JSON/Markdown)
+  const handleUploadAttachment = async (file: File) => {
     if (!file) return;
     setIsUploading(true);
     try {
       const att = await attachmentService.uploadAttachment(node.userId, note.id, file);
       setAttachments((prev) => [...prev, att]);
       if (editor && att.url) {
-        editor
-          .chain()
-          .focus()
-          .insertContent({
-            type: 'image',
-            attrs: {
-              src: att.url,
-              alt: file.name,
-              width: '50%',
-            },
-          })
-          .run();
+        if (file.type.startsWith('video/')) {
+          editor
+            .chain()
+            .focus()
+            .insertContent({
+              type: 'video',
+              attrs: {
+                src: att.url,
+                title: file.name,
+                width: '75%',
+              },
+            })
+            .run();
+        } else if (file.type.startsWith('image/')) {
+          editor
+            .chain()
+            .focus()
+            .insertContent({
+              type: 'image',
+              attrs: {
+                src: att.url,
+                alt: file.name,
+                width: '50%',
+              },
+            })
+            .run();
+        } else {
+          // Bloco visual de Anexo / PDF
+          editor
+            .chain()
+            .focus()
+            .insertContent({
+              type: 'fileAttachment',
+              attrs: {
+                src: att.url,
+                fileName: file.name,
+                fileSize: file.size,
+                mimeType: file.type || 'application/octet-stream',
+              },
+            })
+            .run();
+        }
       }
     } catch (err) {
-      console.warn('Erro ao processar imagem:', err);
+      console.warn('Erro ao processar anexo:', err);
     } finally {
       setIsUploading(false);
     }
@@ -258,6 +291,8 @@ export function NoteEditor({
           linkOnPaste: true,
         }),
         ResizableImage,
+        ResizableVideo,
+        FileAttachment,
         Youtube.configure({
           controls: true,
           allowFullscreen: true,
@@ -275,16 +310,27 @@ export function NoteEditor({
         Highlight.configure({
           multicolor: true,
         }),
-        Details.configure({
+        CustomDetails.configure({
           persist: true,
           HTMLAttributes: {
-            class: 'details-block my-2 border border-[#E3DCD2] rounded-lg p-2.5 bg-[#FEFDFA]',
+            class: 'details-block my-1.5',
           },
         }),
         DetailsSummary,
-        DetailsContent,
+        CustomDetailsContent,
         Placeholder.configure({
-          placeholder: 'Escreva seus pensamentos ou digite "/" para inserir blocos...',
+          placeholder: ({ node, pos, editor }) => {
+            if (node.type.name === 'detailsSummary') {
+              return 'Digite um título...';
+            }
+            if (node.type.name === 'paragraph') {
+              const $pos = editor.state.doc.resolve(pos);
+              if ($pos.parent.type.name === 'detailsContent') {
+                return 'Escreva aqui...';
+              }
+            }
+            return 'Escreva seus pensamentos ou digite "/" para inserir blocos...';
+          },
         }),
       ],
       content: getInitialContent(),
@@ -297,11 +343,15 @@ export function NoteEditor({
           const items = event.clipboardData?.items;
           if (items) {
             for (const item of Array.from(items)) {
-              if (item.type.startsWith('image/')) {
+              if (
+                item.type.startsWith('image/') ||
+                item.type.startsWith('video/') ||
+                item.type === 'application/pdf'
+              ) {
                 const file = item.getAsFile();
                 if (file) {
                   event.preventDefault();
-                  handleUploadImage(file);
+                  handleUploadAttachment(file);
                   return true;
                 }
               }
@@ -313,11 +363,9 @@ export function NoteEditor({
           const files = event.dataTransfer?.files;
           if (files && files.length > 0) {
             for (const file of Array.from(files)) {
-              if (file.type.startsWith('image/') || file.type === 'application/pdf') {
-                event.preventDefault();
-                handleUploadImage(file);
-                return true;
-              }
+              event.preventDefault();
+              handleUploadAttachment(file);
+              return true;
             }
           }
           return false;
@@ -617,7 +665,8 @@ export function NoteEditor({
       {/* 1. Barra de Ferramentas diretamente acima da nota */}
       <EditorToolbar
         editor={editor}
-        onUploadImage={handleUploadImage}
+        onUploadAttachment={handleUploadAttachment}
+        onUploadImage={handleUploadAttachment}
         highlightModeColor={highlightModeColor}
         onSetHighlightModeColor={setHighlightModeColor}
       />
@@ -645,6 +694,47 @@ export function NoteEditor({
               </div>
             </DocumentTitleContext.Provider>
 
+            {/* Ações contextuais de tabela flutuantes (Adicionar linha abaixo, adicionar coluna ao lado, selecionar, excluir) */}
+            {editor?.isActive('table') && (
+              <div className="sticky bottom-4 right-4 self-end mt-4 inline-flex items-center gap-1.5 px-3 py-1.5 bg-[#FEFDFA] border border-[#D9C5B2] rounded-lg shadow-md z-20 text-xs text-[#3D352E] animate-in fade-in slide-in-from-bottom-2">
+                <span className="text-[10px] font-semibold text-[#8C7B6E] uppercase tracking-wider pr-1 border-r border-[#E3DCD2]">
+                  Tabela
+                </span>
+                <button
+                  type="button"
+                  title="Adicionar linha abaixo da tabela"
+                  onClick={() => editor.chain().focus().addRowAfter().run()}
+                  className="flex items-center gap-1 px-2 py-1 rounded bg-[#F9F7F2] hover:bg-[#E3DCD2] text-[#3D352E] font-medium transition-colors cursor-pointer"
+                >
+                  <Plus className="w-3 h-3 text-[#8C7B6E]" /> Linha
+                </button>
+                <button
+                  type="button"
+                  title="Adicionar coluna à direita da tabela"
+                  onClick={() => editor.chain().focus().addColumnAfter().run()}
+                  className="flex items-center gap-1 px-2 py-1 rounded bg-[#F9F7F2] hover:bg-[#E3DCD2] text-[#3D352E] font-medium transition-colors cursor-pointer"
+                >
+                  <Plus className="w-3 h-3 text-[#8C7B6E]" /> Coluna
+                </button>
+                <button
+                  type="button"
+                  title="Selecionar tabela inteira"
+                  onClick={() => (editor.chain().focus() as any).selectParentNode().run()}
+                  className="flex items-center gap-1 px-2 py-1 rounded bg-[#F9F7F2] hover:bg-[#E3DCD2] text-[#3D352E] transition-colors cursor-pointer"
+                >
+                  <Check className="w-3 h-3 text-[#8C7B6E]" /> Selecionar
+                </button>
+                <button
+                  type="button"
+                  title="Excluir tabela inteira"
+                  onClick={() => editor.chain().focus().deleteTable().run()}
+                  className="flex items-center gap-1 px-2 py-1 rounded hover:bg-red-50 text-red-600 transition-colors cursor-pointer"
+                >
+                  <Trash2 className="w-3 h-3" /> Excluir
+                </button>
+              </div>
+            )}
+
             {/* Slash Command Palette Popup */}
             <SlashCommandMenu
               editor={editor}
@@ -657,16 +747,16 @@ export function NoteEditor({
         </div>
       </div>
 
-      {/* Hidden input para seleção e upload de imagem via explorador do SO */}
+      {/* Hidden input para seleção e upload de arquivo/imagem via explorador do SO */}
       <input
         ref={noteImageInputRef}
         type="file"
-        accept="image/jpeg,image/png,image/webp,image/gif,image/svg+xml"
+        accept="image/jpeg,image/png,image/webp,image/gif,image/svg+xml,video/mp4,video/webm,video/quicktime,application/pdf"
         className="hidden"
         onChange={async (e) => {
           const file = e.target.files?.[0];
           if (file) {
-            await handleUploadImage(file);
+            await handleUploadAttachment(file);
           }
           e.target.value = '';
         }}

@@ -16,6 +16,7 @@ import {
   Code,
   Table as TableIcon,
   Image as ImageIcon,
+  Paperclip,
   Youtube,
   Link as LinkIcon,
   Minus,
@@ -29,11 +30,12 @@ import {
   Trash2,
   Sigma,
   ListCollapse,
+  Check,
 } from 'lucide-react';
 
 interface EditorToolbarProps {
   editor: Editor | null;
-  onInsertAttachment?: () => void;
+  onUploadAttachment?: (file: File) => Promise<void> | void;
   onUploadImage?: (file: File) => Promise<void> | void;
   highlightModeColor?: string | null;
   onSetHighlightModeColor?: (color: string | null) => void;
@@ -48,21 +50,28 @@ const PASTEL_COLORS = [
 
 export function EditorToolbar({
   editor,
+  onUploadAttachment,
   onUploadImage,
   highlightModeColor,
   onSetHighlightModeColor,
 }: EditorToolbarProps) {
   const [showTableMenu, setShowTableMenu] = useState(false);
+  const [tableHover, setTableHover] = useState({ rows: 3, cols: 3 });
   const [showHighlightMenu, setShowHighlightMenu] = useState(false);
   const [selectedHighlightColor, setSelectedHighlightColor] = useState('#FFF3A6');
   const imageFileInputRef = useRef<HTMLInputElement>(null);
+  const attachmentFileInputRef = useRef<HTMLInputElement>(null);
   const highlightMenuRef = useRef<HTMLDivElement>(null);
+  const tableMenuRef = useRef<HTMLDivElement>(null);
 
-  // Close highlight palette on outside click if not actively in highlight mode
+  // Close menus on outside click
   useEffect(() => {
     function handleClickOutside(event: MouseEvent) {
       if (highlightMenuRef.current && !highlightMenuRef.current.contains(event.target as Node)) {
         setShowHighlightMenu(false);
+      }
+      if (tableMenuRef.current && !tableMenuRef.current.contains(event.target as Node)) {
+        setShowTableMenu(false);
       }
     }
     document.addEventListener('mousedown', handleClickOutside);
@@ -136,6 +145,34 @@ export function EditorToolbar({
       await onUploadImage(file);
     }
     e.target.value = '';
+  };
+
+  const addAttachment = () => {
+    clearHighlightMode();
+    attachmentFileInputRef.current?.click();
+  };
+
+  const handleAttachmentFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (onUploadAttachment) {
+        await onUploadAttachment(file);
+      } else if (onUploadImage) {
+        await onUploadImage(file);
+      }
+    }
+    e.target.value = '';
+  };
+
+  const handleSelectTableDimension = (rows: number, cols: number) => {
+    editor.chain().focus().insertTable({ rows, cols, withHeaderRow: true }).run();
+    setShowTableMenu(false);
+  };
+
+  const handleSelectEntireTable = () => {
+    // Seleciona a tabela inteira
+    (editor.chain().focus() as any).selectAll?.() || editor.chain().focus().selectParentNode().run();
+    setShowTableMenu(false);
   };
 
   return (
@@ -434,11 +471,12 @@ export function EditorToolbar({
       <div className="w-px h-4 bg-[#E3DCD2] mx-1" />
 
       {/* 7. Mídias e Tabelas */}
-      {/* Tabela Dropdown */}
-      <div className="relative">
+      {/* Tabela Dropdown com Seletor Visual 6x6 */}
+      <div ref={tableMenuRef} className="relative">
         <button
           type="button"
-          title="Tabela"
+          id="btn-toolbar-table"
+          title="Tabela (Seletor 6x6)"
           onClick={() => setShowTableMenu(!showTableMenu)}
           className={`p-1.5 rounded-md transition-colors cursor-pointer ${
             editor.isActive('table') || showTableMenu
@@ -450,30 +488,43 @@ export function EditorToolbar({
         </button>
 
         {showTableMenu && (
-          <div className="absolute top-full left-0 mt-1 p-1 bg-[#FEFDFA] border border-[#E3DCD2] rounded-lg shadow-md z-30 flex flex-col gap-1 min-w-[150px]">
-            <button
-              type="button"
-              onClick={() => {
-                editor.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run();
-                setShowTableMenu(false);
-              }}
-              className="px-2 py-1 text-left hover:bg-[#F9F7F2] rounded text-xs text-[#3D352E] cursor-pointer"
+          <div className="absolute top-full left-0 mt-1.5 p-2.5 bg-[#FEFDFA] border border-[#E3DCD2] rounded-lg shadow-lg z-30 flex flex-col gap-2 min-w-[180px] animate-in fade-in zoom-in-95 duration-100">
+            <div className="flex items-center justify-between text-[11px] font-semibold text-[#8C7B6E] uppercase tracking-wider">
+              <span>Inserir Tabela</span>
+              <span className="font-mono text-[#3D352E]">
+                {tableHover.rows} × {tableHover.cols}
+              </span>
+            </div>
+
+            {/* Grade Interativa 6x6 */}
+            <div
+              className="grid grid-cols-6 gap-1 p-1 bg-[#F9F7F2] rounded-md border border-[#E3DCD2]"
+              onMouseLeave={() => setTableHover({ rows: 3, cols: 3 })}
             >
-              Inserir Tabela 3x3
-            </button>
+              {Array.from({ length: 6 }).map((_, rIdx) =>
+                Array.from({ length: 6 }).map((_, cIdx) => {
+                  const isHovered = rIdx < tableHover.rows && cIdx < tableHover.cols;
+                  return (
+                    <div
+                      key={`${rIdx}-${cIdx}`}
+                      onMouseEnter={() => setTableHover({ rows: rIdx + 1, cols: cIdx + 1 })}
+                      onClick={() => handleSelectTableDimension(rIdx + 1, cIdx + 1)}
+                      className={`w-4 h-4 rounded-xs border transition-colors cursor-pointer ${
+                        isHovered
+                          ? 'bg-[#8C7B6E] border-[#796A5E]'
+                          : 'bg-white border-[#E3DCD2] hover:bg-[#D9C5B2]'
+                      }`}
+                    />
+                  );
+                })
+              )}
+            </div>
+
             {editor.isActive('table') && (
-              <>
-                <div className="h-px bg-[#E3DCD2] my-0.5" />
-                <button
-                  type="button"
-                  onClick={() => {
-                    editor.chain().focus().addColumnAfter().run();
-                    setShowTableMenu(false);
-                  }}
-                  className="flex items-center gap-1.5 px-2 py-1 text-left hover:bg-[#F9F7F2] rounded text-xs text-[#3D352E] cursor-pointer"
-                >
-                  <Columns className="w-3 h-3 text-[#8C7B6E]" /> + Coluna
-                </button>
+              <div className="flex flex-col gap-0.5 pt-1.5 border-t border-[#E3DCD2]">
+                <span className="text-[10px] font-semibold text-[#8C7B6E] uppercase px-1 py-0.5">
+                  Ações da Tabela
+                </span>
                 <button
                   type="button"
                   onClick={() => {
@@ -487,34 +538,70 @@ export function EditorToolbar({
                 <button
                   type="button"
                   onClick={() => {
+                    editor.chain().focus().addColumnAfter().run();
+                    setShowTableMenu(false);
+                  }}
+                  className="flex items-center gap-1.5 px-2 py-1 text-left hover:bg-[#F9F7F2] rounded text-xs text-[#3D352E] cursor-pointer"
+                >
+                  <Columns className="w-3 h-3 text-[#8C7B6E]" /> + Coluna
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSelectEntireTable}
+                  className="flex items-center gap-1.5 px-2 py-1 text-left hover:bg-[#F9F7F2] rounded text-xs text-[#3D352E] cursor-pointer"
+                >
+                  <Check className="w-3 h-3 text-[#8C7B6E]" /> Selecionar Tabela Inteira
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
                     editor.chain().focus().deleteTable().run();
                     setShowTableMenu(false);
                   }}
                   className="flex items-center gap-1.5 px-2 py-1 text-left hover:bg-red-50 rounded text-xs text-red-600 cursor-pointer"
                 >
-                  <Trash2 className="w-3 h-3" /> Excluir Tabela
+                  <Trash2 className="w-3 h-3" /> Excluir Tabela Inteira
                 </button>
-              </>
+              </div>
             )}
           </div>
         )}
       </div>
 
-      {/* Inserir Imagem do computador (sem pedir URL) */}
+      {/* Inserir Anexo / PDF do computador */}
+      <button
+        type="button"
+        id="btn-insert-attachment"
+        title="Inserir Anexo / PDF do Computador"
+        onClick={addAttachment}
+        className="p-1.5 rounded-md hover:bg-[#E3DCD2] text-[#8C7B6E] transition-colors cursor-pointer"
+        aria-label="Inserir Anexo / PDF do Computador"
+      >
+        <Paperclip className="w-3.5 h-3.5" />
+      </button>
+      <input
+        ref={attachmentFileInputRef}
+        type="file"
+        accept="application/pdf,.pdf,application/*,text/*,image/*,video/*"
+        className="hidden"
+        onChange={handleAttachmentFileChange}
+      />
+
+      {/* Inserir Imagem ou Vídeo do computador (sem pedir URL) */}
       <button
         type="button"
         id="btn-insert-image"
-        title="Inserir Imagem do Computador"
+        title="Inserir Imagem ou Vídeo do Computador"
         onClick={addImage}
         className="p-1.5 rounded-md hover:bg-[#E3DCD2] text-[#8C7B6E] transition-colors cursor-pointer"
-        aria-label="Inserir Imagem do Computador"
+        aria-label="Inserir Imagem ou Vídeo do Computador"
       >
         <ImageIcon className="w-3.5 h-3.5" />
       </button>
       <input
         ref={imageFileInputRef}
         type="file"
-        accept="image/jpeg,image/png,image/webp,image/gif,image/svg+xml"
+        accept="image/jpeg,image/png,image/webp,image/gif,image/svg+xml,video/mp4,video/webm,video/quicktime"
         className="hidden"
         onChange={handleImageFileChange}
       />

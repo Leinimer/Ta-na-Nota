@@ -305,7 +305,55 @@ export class MarkdownService {
         }
       }
 
-      // 10. YouTube Embed Line: [YouTube](url) or direct youtube URL
+      // 10. Details / Toggle Block: <details ...> ... </details>
+      if (line.trim().startsWith('<details')) {
+        const hasOpen = /<details\s+[^>]*open/i.test(line.trim()) || /<details\s+open>/i.test(line.trim());
+        const detailLines: string[] = [];
+        i++;
+        while (i < lines.length && !lines[i].trim().startsWith('</details>')) {
+          detailLines.push(lines[i]);
+          i++;
+        }
+        if (i < lines.length && lines[i].trim().startsWith('</details>')) {
+          i++;
+        }
+
+        let summaryText = 'Toggle';
+        const innerLines: string[] = [];
+        for (const dLine of detailLines) {
+          const sumMatch = dLine.match(/<summary>(.*?)<\/summary>/i);
+          if (sumMatch) {
+            summaryText = sumMatch[1];
+          } else if (dLine.trim()) {
+            innerLines.push(dLine);
+          }
+        }
+
+        const innerContent = innerLines.length > 0
+          ? innerLines.map((txt) => ({
+              type: 'paragraph',
+              content: this.parseInlineText(txt),
+            }))
+          : [{ type: 'paragraph' }];
+
+        content.push({
+          type: 'details',
+          attrs: { open: hasOpen },
+          content: [
+            {
+              type: 'detailsSummary',
+              content: this.parseInlineText(summaryText),
+            },
+            {
+              type: 'detailsContent',
+              content: innerContent,
+            },
+          ],
+        });
+        continue;
+      }
+
+      // 11. YouTube Embed Line: [YouTube](url) or direct youtube URL
       const ytMatch = line.trim().match(/^\[YouTube\]\((https?:\/\/(?:www\.)?(?:youtube\.com|youtu\.be)\/[^\)]+)\)$/i) ||
                       line.trim().match(/^(https?:\/\/(?:www\.)?(?:youtube\.com\/watch\?v=|youtu\.be\/)[\w-]+)$/i);
       if (ytMatch) {
@@ -319,6 +367,33 @@ export class MarkdownService {
 
       // 11. Image: ![alt](url) - garante extração como nó de imagem mesmo com espaços ou títulos
       const trimmedLine = line.trim();
+
+      // Video: [Vídeo](url)
+      const videoMatch = trimmedLine.match(/^\[(?:Vídeo|Video)\]\(([^)\s]+)\)$/i);
+      if (videoMatch) {
+        content.push({
+          type: 'video',
+          attrs: { src: videoMatch[1], width: '75%' },
+        });
+        i++;
+        continue;
+      }
+
+      // Attachment: [Anexo: nome](url)
+      const attachmentMatch = trimmedLine.match(/^\[Anexo:\s*([^\]]*)\]\(([^)\s]+)\)$/i);
+      if (attachmentMatch) {
+        content.push({
+          type: 'fileAttachment',
+          attrs: {
+            src: attachmentMatch[2],
+            fileName: attachmentMatch[1],
+            mimeType: attachmentMatch[1].toLowerCase().endsWith('.pdf') ? 'application/pdf' : 'application/octet-stream',
+          },
+        });
+        i++;
+        continue;
+      }
+
       const imgOnlyMatch = trimmedLine.match(/^!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)$/);
       if (imgOnlyMatch) {
         content.push({
@@ -456,6 +531,32 @@ export class MarkdownService {
         const src = node.attrs?.src || '';
         const alt = node.attrs?.alt || 'Imagem';
         return `![${alt}](${src})`;
+      }
+
+      case 'video': {
+        const src = node.attrs?.src || '';
+        return `[Vídeo](${src})`;
+      }
+
+      case 'fileAttachment': {
+        const src = node.attrs?.src || '';
+        const name = node.attrs?.fileName || 'Anexo';
+        return `[Anexo: ${name}](${src})`;
+      }
+
+      case 'details': {
+        const openAttr = node.attrs?.open ? ' open' : '';
+        const inner = this.renderNodes(node.content || []);
+        return `<details${openAttr}>\n${inner}\n</details>`;
+      }
+
+      case 'detailsSummary': {
+        const text = this.renderInlineContent(node.content);
+        return `<summary>${text}</summary>`;
+      }
+
+      case 'detailsContent': {
+        return this.renderNodes(node.content || []);
       }
 
       case 'youtube': {

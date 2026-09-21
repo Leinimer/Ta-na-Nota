@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { TreeNode, TagRecord, AppUser, SyncStatus, SearchResults } from '@/types';
 import { TreeNodeItem } from './TreeNodeItem';
 import { searchService } from '@/services/searchService';
@@ -91,8 +91,74 @@ export function Sidebar({
   });
   const [isSearching, setIsSearching] = useState(false);
   const [isRootDragOver, setIsRootDragOver] = useState(false);
+  const [selectedNodeIds, setSelectedNodeIds] = useState<Set<string>>(new Set());
+  const [lastClickedNodeId, setLastClickedNodeId] = useState<string | null>(null);
+  const [selectionBox, setSelectionBox] = useState<{
+    startX: number;
+    startY: number;
+    currentX: number;
+    currentY: number;
+  } | null>(null);
+  const isDraggingSelectionRef = useRef(false);
+  const justFinishedDragRef = useRef(false);
+  const treeContainerRef = useRef<HTMLDivElement>(null);
   const sourceMenuRef = useRef<HTMLDivElement>(null);
+  const sidebarRef = useRef<HTMLElement>(null);
   const { canInstall, installApp } = usePwaInstall();
+
+  // Tecla Escape para deselecionar itens múltiplos
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setSelectedNodeIds(new Set());
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // Limpa a seleção quando o usuário clica fora (editor, topbar, área vazia da sidebar/árvore)
+  // Mas ignora cliques em nós da árvore, barra de seleção, controles e botões
+  useEffect(() => {
+    if (selectedNodeIds.size === 0) return;
+
+    const handlePointerDown = (event: PointerEvent) => {
+      // Se acabou de fazer um drag de seleção ou está arrastando, não limpar
+      if (isDraggingSelectionRef.current || justFinishedDragRef.current) return;
+
+      const target = event.target as HTMLElement | null;
+      if (!target) return;
+
+      // 1. Não limpar se clicar em item da árvore (deixa handleNodeClick gerenciar)
+      if (target.closest('[data-tree-node-id]') || target.closest('[id^="tree-node-"]')) {
+        return;
+      }
+
+      // 2. Não limpar se clicar na barra de seleção ou no botão "Limpar seleção"
+      if (target.closest('[data-selection-toolbar]')) {
+        return;
+      }
+
+      // 3. Não limpar se clicar em controles da sidebar, inputs, menus contextuais ou botões
+      if (
+        target.closest('[data-sidebar-control]') ||
+        target.closest('button') ||
+        target.closest('input') ||
+        target.closest('[role="menu"]') ||
+        target.closest('.context-menu')
+      ) {
+        return;
+      }
+
+      // Se clicou em qualquer outro lugar (no editor, fora da sidebar, ou em espaço vazio da árvore):
+      setSelectedNodeIds(new Set());
+    };
+
+    document.addEventListener('pointerdown', handlePointerDown);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDown);
+    };
+  }, [selectedNodeIds.size]);
 
   // Fecha menu de fontes se clicar fora
   useEffect(() => {
@@ -208,13 +274,261 @@ export function Sidebar({
   const totalMatches =
     visibleFolders.length + visibleNotes.length + visibleTags.length + visibleContent.length;
 
-  // Root drop handler (move to root)
+  // Lista plana de nós visíveis na árvore (para seleção por intervalo e colisão do marquee)
+  const visibleTreeNodes = useMemo(() => {
+    const result: TreeNode[] = [];
+    const traverse = (nodes: TreeNode[]) => {
+      for (const n of nodes) {
+        result.push(n);
+        if (n.type === 'folder' && expandedFolders.has(n.id) && n.children && n.children.length > 0) {
+          traverse(n.children);
+        }
+      }
+    };
+    traverse(tree);
+    return result;
+  }, [tree, expandedFolders]);
+
+  // Helper para verificar se um nó é descendente de outro (evita ciclos de hierarquia)
+  const isDescendant = useCallback(
+    (ancestorId: string, potentialDescendantId: string | null, nodes: TreeNode[]): boolean => {
+      if (!potentialDescendantId) return false;
+      if (ancestorId === potentialDescendantId) return true;
+
+      const findNode = (list: TreeNode[], id: string): TreeNode | null => {
+        for (const n of list) {
+          if (n.id === id) return n;
+          if (n.children && n.children.length > 0) {
+            const found = findNode(n.children, id);
+            if (found) return found;
+          }
+        }
+        return null;
+      };
+
+      const targetNode = findNode(nodes, potentialDescendantId);
+      if (!targetNode) return false;
+
+      let currParent = targetNode.parentId;
+      while (currParent) {
+        if (currParent === ancestorId) return true;
+        const pNode = findNode(nodes, currParent);
+        currParent = pNode ? pNode.parentId : null;
+      }
+      return false;
+    },
+    []
+  );
+
+  // Filtra itens redundantes da seleção: se uma pasta pai e seus filhos estão ambos selecionados,
+  // move apenas a pasta pai para evitar inconsistências de hierarquia.
+  const filterTopLevelSelected = useCallback((ids: string[], nodes: TreeNode[]): string[] => {
+    const idSet = new Set(ids);
+    return ids.filter((id) => {
+      const findNode = (list: TreeNode[], targetId: string): TreeNode | null => {
+        for (const n of list) {
+          if (n.id === targetId) return n;
+          if (n.children && n.children.length > 0) {
+            const f = findNode(n.children, targetId);
+            if (f) return f;
+          }
+        }
+        return null;
+      };
+      const n = findNode(nodes, id);
+      let p = n ? n.parentId : null;
+      while (p) {
+        if (idSet.has(p)) return false; // Um ancestral já está no grupo a mover!
+        const pNode = findNode(nodes, p);
+        p = pNode ? pNode.parentId : null;
+      }
+      return true;
+    });
+  }, []);
+
+  // Move múltiplos nós selecionados juntos
+  const handleMoveMultipleNodes = useCallback(
+    (draggedIds: string[], targetParentId: string | null) => {
+      const topLevelIds = filterTopLevelSelected(draggedIds, tree);
+      for (const id of topLevelIds) {
+        if (id === targetParentId) continue;
+        if (targetParentId && isDescendant(id, targetParentId, tree)) continue;
+        onMoveNode(id, targetParentId);
+      }
+    },
+    [filterTopLevelSelected, isDescendant, onMoveNode, tree]
+  );
+
+  // Clique em um nó da árvore (suporta Ctrl/Cmd para toggle e Shift para range)
+  const handleNodeClick = (node: TreeNode, e: React.MouseEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      setSelectedNodeIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(node.id)) {
+          next.delete(node.id);
+        } else {
+          next.add(node.id);
+        }
+        return next;
+      });
+      setLastClickedNodeId(node.id);
+      return;
+    }
+
+    if (e.shiftKey && lastClickedNodeId) {
+      e.preventDefault();
+      e.stopPropagation();
+      const startIdx = visibleTreeNodes.findIndex((n) => n.id === lastClickedNodeId);
+      const endIdx = visibleTreeNodes.findIndex((n) => n.id === node.id);
+      if (startIdx !== -1 && endIdx !== -1) {
+        const min = Math.min(startIdx, endIdx);
+        const max = Math.max(startIdx, endIdx);
+        const rangeNodes = visibleTreeNodes.slice(min, max + 1);
+        setSelectedNodeIds((prev) => {
+          const next = new Set(prev);
+          rangeNodes.forEach((n) => next.add(n.id));
+          return next;
+        });
+      }
+      return;
+    }
+
+    // Clique normal sem modificadores
+    if (selectedNodeIds.size > 0) {
+      setSelectedNodeIds(new Set());
+    }
+    setLastClickedNodeId(node.id);
+    if (node.type === 'folder') {
+      onToggleExpand(node.id);
+    } else {
+      onSelectNode(node);
+      if (onCloseMobileDrawer) onCloseMobileDrawer();
+    }
+  };
+
+  // Arraste com o mouse em áreas vazias ou sobre itens para criar o retângulo de seleção visual
+  const handleTreeContainerMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return; // Apenas botão principal (esquerdo)
+    const target = e.target as HTMLElement;
+    // Não iniciar seleção de caixa se clicar em botões, chevrons, inputs, menus, barra de seleção ou controles
+    if (
+      target.closest('button') ||
+      target.closest('input') ||
+      target.closest('[role="menu"]') ||
+      target.closest('.context-menu') ||
+      target.closest('[data-selection-toolbar]') ||
+      target.closest('[data-sidebar-control]')
+    ) {
+      return;
+    }
+
+    const clickedNodeElement =
+      target.closest('[data-tree-node-id]') || target.closest('[id^="tree-node-"]');
+
+    const startX = e.clientX;
+    const startY = e.clientY;
+    let hasMoved = false;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const dx = Math.abs(moveEvent.clientX - startX);
+      const dy = Math.abs(moveEvent.clientY - startY);
+      if (!hasMoved && (dx > 4 || dy > 4)) {
+        hasMoved = true;
+        isDraggingSelectionRef.current = true;
+      }
+      if (!hasMoved) return;
+
+      const currentX = moveEvent.clientX;
+      const currentY = moveEvent.clientY;
+
+      setSelectionBox({
+        startX,
+        startY,
+        currentX,
+        currentY,
+      });
+
+      const boxL = Math.min(startX, currentX);
+      const boxR = Math.max(startX, currentX);
+      const boxT = Math.min(startY, currentY);
+      const boxB = Math.max(startY, currentY);
+
+      const newlySelected = new Set<string>();
+      for (const n of visibleTreeNodes) {
+        const el = document.getElementById(`tree-node-${n.id}`);
+        if (el) {
+          const r = el.getBoundingClientRect();
+          const overlaps = !(boxR < r.left || boxL > r.right || boxB < r.top || boxT > r.bottom);
+          if (overlaps) {
+            newlySelected.add(n.id);
+          }
+        }
+      }
+
+      setSelectedNodeIds((prev) => {
+        if (moveEvent.ctrlKey || moveEvent.metaKey) {
+          const combined = new Set(prev);
+          newlySelected.forEach((id) => combined.add(id));
+          return combined;
+        }
+        return newlySelected;
+      });
+    };
+
+    const handleMouseUp = () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+      setSelectionBox(null);
+
+      if (hasMoved) {
+        // Ao soltar o mouse após arrastar:
+        // A SELEÇÃO CONTINUA! Não limpar selectedNodeIds no mouseup!
+        isDraggingSelectionRef.current = false;
+        justFinishedDragRef.current = true;
+        setTimeout(() => {
+          justFinishedDragRef.current = false;
+        }, 150);
+        return;
+      }
+
+      // Se não houve movimento e o clique ocorreu em espaço vazio da árvore:
+      // limpa a seleção
+      if (!clickedNodeElement) {
+        setSelectedNodeIds(new Set());
+      }
+    };
+
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+  };
+
+  // Root drop handler (move para a raiz, suportando nó único ou múltiplos)
   const handleRootDrop = (e: React.DragEvent) => {
     e.preventDefault();
     setIsRootDragOver(false);
-    const draggedId = e.dataTransfer.getData('text/plain');
-    if (draggedId) {
-      onMoveNode(draggedId, null);
+
+    let multipleIds: string[] | null = null;
+    try {
+      const jsonData = e.dataTransfer.getData('application/json');
+      if (jsonData) {
+        const parsed = JSON.parse(jsonData);
+        if (Array.isArray(parsed.ids)) {
+          multipleIds = parsed.ids;
+        }
+      }
+    } catch {
+      multipleIds = null;
+    }
+
+    if (multipleIds && multipleIds.length > 0) {
+      handleMoveMultipleNodes(multipleIds, null);
+    } else {
+      const draggedId = e.dataTransfer.getData('text/plain');
+      if (draggedId) {
+        onMoveNode(draggedId, null);
+      }
     }
   };
 
@@ -223,6 +537,7 @@ export function Sidebar({
   return (
     <aside
       id="app-sidebar"
+      ref={sidebarRef}
       className="w-full h-full flex flex-col bg-[#F9F7F2] border-r border-[#E3DCD2] text-[#3D352E] select-none"
     >
       {/* 1. Topo da Sidebar: [logo] Tá na nota */}
@@ -346,6 +661,8 @@ export function Sidebar({
       {/* 3. Área Central Rolável (Resultados da Busca OU Árvore/Abas) */}
       <div
         id="sidebar-tree-container"
+        ref={treeContainerRef}
+        onMouseDown={handleTreeContainerMouseDown}
         onDragOver={(e) => {
           e.preventDefault();
           setIsRootDragOver(true);
@@ -518,6 +835,31 @@ export function Sidebar({
             {/* Tab 1: Tree View */}
             {activeTab === 'tree' && (
               <div className="space-y-0.5">
+                {selectedNodeIds.size > 0 && (
+                  <div
+                    data-selection-toolbar="true"
+                    className="mx-1 mb-2 px-2.5 py-1 bg-[#E3DCD2] border border-[#D9C5B2] rounded-md text-xs text-[#3D352E] flex items-center justify-between animate-in fade-in select-none shadow-2xs"
+                  >
+                    <span className="font-medium text-[11px] text-[#5C5046]">
+                      {selectedNodeIds.size} {selectedNodeIds.size === 1 ? 'selecionado' : 'selecionados'}
+                    </span>
+                    <button
+                      type="button"
+                      data-selection-toolbar="true"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setSelectedNodeIds(new Set());
+                      }}
+                      className="inline-flex items-center gap-1 text-[#8C7B6E] hover:text-[#3D352E] font-medium text-[11px] transition-colors cursor-pointer px-1.5 py-0.5 rounded hover:bg-[#D9C5B2]/50"
+                      title="Limpar seleção"
+                      aria-label="Limpar seleção"
+                    >
+                      <span>Limpar</span>
+                      <span className="text-xs font-bold leading-none">×</span>
+                    </button>
+                  </div>
+                )}
+
                 {tree.length === 0 ? (
                   <div className="py-8 text-center text-xs text-[#8C7B6E]/70 italic">
                     Nenhuma pasta ou nota criada ainda.
@@ -531,6 +873,8 @@ export function Sidebar({
                       activeNodeId={activeNodeId}
                       expandedFolders={expandedFolders}
                       editingNodeId={editingNodeId}
+                      selectedNodeIds={selectedNodeIds}
+                      onNodeClick={handleNodeClick}
                       onFinishInlineEdit={onFinishInlineEdit}
                       onToggleExpand={onToggleExpand}
                       onSelectNode={(n) => {
@@ -545,6 +889,7 @@ export function Sidebar({
                       onToggleFavorite={onToggleFavorite}
                       onExportNote={onExportNote}
                       onMoveNode={onMoveNode}
+                      onMoveMultipleNodes={handleMoveMultipleNodes}
                     />
                   ))
                 )}
@@ -659,7 +1004,7 @@ export function Sidebar({
       </div>
 
       {/* 4. Controles fixados na parte inferior da Sidebar */}
-      <div className="shrink-0 mt-auto border-t border-[#E3DCD2] bg-[#F9F7F2] select-none">
+      <div data-sidebar-control="true" className="shrink-0 mt-auto border-t border-[#E3DCD2] bg-[#F9F7F2] select-none">
         {/* Linha 1: [ Pastas ] [ Favoritos ] [ Recentes ] [ Tags ] */}
         <div className="p-2 pb-1.5 grid grid-cols-4 gap-1 text-xs">
           <button
@@ -802,6 +1147,22 @@ export function Sidebar({
           </div>
         </div>
       </div>
+
+      {/* Retângulo de seleção visual por arraste (Marquee) */}
+      {selectionBox && (
+        <div
+          style={{
+            position: 'fixed',
+            left: `${Math.min(selectionBox.startX, selectionBox.currentX)}px`,
+            top: `${Math.min(selectionBox.startY, selectionBox.currentY)}px`,
+            width: `${Math.abs(selectionBox.currentX - selectionBox.startX)}px`,
+            height: `${Math.abs(selectionBox.currentY - selectionBox.startY)}px`,
+            pointerEvents: 'none',
+            zIndex: 9999,
+          }}
+          className="border border-[#8C7B6E] bg-[#8C7B6E]/15 rounded-xs"
+        />
+      )}
     </aside>
   );
 }

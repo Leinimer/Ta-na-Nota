@@ -3,14 +3,13 @@
 import { Node, mergeAttributes } from '@tiptap/core';
 import { ReactNodeViewRenderer, NodeViewWrapper, NodeViewProps } from '@tiptap/react';
 import React, { useState, useRef, useEffect } from 'react';
-import { GripVertical } from 'lucide-react';
+import { GripVertical, Play } from 'lucide-react';
 import { attachmentService, subscribeToAttachmentUpdates } from '@/services/attachmentService';
 
-function ResizableImageView({ node, updateAttributes, selected }: NodeViewProps) {
+function ResizableVideoView({ node, updateAttributes, selected }: NodeViewProps) {
   const [resizing, setResizing] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
 
-  // Inicializa displaySrc se já for data:/blob:/http, caso contrário resolve assincronamente
   const initialSrc = node.attrs.src || '';
   const isDirectUrl = initialSrc.startsWith('data:') || initialSrc.startsWith('blob:') || initialSrc.startsWith('http');
   const [displaySrc, setDisplaySrc] = useState<string>(isDirectUrl ? initialSrc : '');
@@ -40,8 +39,7 @@ function ResizableImageView({ node, updateAttributes, selected }: NodeViewProps)
         currentSrc === `attachment:${storagePath}` ||
         currentSrc === `attachment:${id}` ||
         currentSrc === `attachment-local:${id}` ||
-        storagePath.endsWith(currentSrc) ||
-        (node.attrs.alt && storagePath.includes(node.attrs.alt))
+        storagePath.endsWith(currentSrc)
       ) {
         setDisplaySrc(objectUrl);
         setIsLoading(false);
@@ -52,10 +50,10 @@ function ResizableImageView({ node, updateAttributes, selected }: NodeViewProps)
       isMounted = false;
       unsubscribe();
     };
-  }, [node.attrs.src, node.attrs.alt]);
+  }, [node.attrs.src]);
 
-  // Default initial width is 50%
-  const currentWidth = node.attrs.width || '50%';
+  // Default initial width is 75%
+  const currentWidth = node.attrs.width || '75%';
 
   const handleStartResize = (e: React.MouseEvent, direction: 'se' | 'sw') => {
     e.preventDefault();
@@ -63,11 +61,11 @@ function ResizableImageView({ node, updateAttributes, selected }: NodeViewProps)
     setResizing(true);
 
     const startX = e.clientX;
-    const initialWidth = containerRef.current?.offsetWidth || 300;
+    const initialWidth = containerRef.current?.offsetWidth || 400;
 
     const onMouseMove = (moveEvent: MouseEvent) => {
       const deltaX = direction === 'se' ? moveEvent.clientX - startX : startX - moveEvent.clientX;
-      const newWidth = Math.max(120, Math.min(850, initialWidth + deltaX));
+      const newWidth = Math.max(200, Math.min(850, initialWidth + deltaX));
       if (containerRef.current) {
         containerRef.current.style.width = `${newWidth}px`;
       }
@@ -78,7 +76,7 @@ function ResizableImageView({ node, updateAttributes, selected }: NodeViewProps)
       window.removeEventListener('mouseup', onMouseUp);
       setResizing(false);
       const deltaX = direction === 'se' ? upEvent.clientX - startX : startX - upEvent.clientX;
-      const finalWidth = Math.max(120, Math.min(850, initialWidth + deltaX));
+      const finalWidth = Math.max(200, Math.min(850, initialWidth + deltaX));
       updateAttributes({ width: `${Math.round(finalWidth)}px` });
     };
 
@@ -88,21 +86,21 @@ function ResizableImageView({ node, updateAttributes, selected }: NodeViewProps)
 
   return (
     <NodeViewWrapper
-      className="resizable-image-wrapper flex justify-center my-3 select-none"
+      className="resizable-video-wrapper flex justify-center my-3 select-none"
       draggable="true"
     >
       <div
         ref={containerRef}
         style={{ width: currentWidth, maxWidth: '100%' }}
-        className={`relative group inline-block rounded-lg transition-shadow ${
+        className={`relative group inline-block rounded-lg transition-shadow bg-black/5 ${
           selected || resizing ? 'ring-2 ring-[#8C7B6E] shadow-md' : ''
         }`}
       >
-        {/* Block Drag Handle (⋮⋮) positioned right on the top-left corner of the image */}
+        {/* Block Drag Handle (⋮⋮) positioned on top-left border */}
         <div
           data-drag-handle
           draggable="true"
-          title="Arrastar para reposicionar imagem no texto"
+          title="Arrastar para reposicionar vídeo no texto"
           className={`absolute top-2 left-2 w-6 h-6 rounded-md bg-[#FEFDFA]/95 backdrop-blur-xs border border-[#D9C5B2] text-[#8C7B6E] hover:text-[#3D352E] hover:bg-[#E3DCD2] shadow-xs flex items-center justify-center cursor-grab active:cursor-grabbing z-20 transition-opacity ${
             selected || resizing ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
           }`}
@@ -112,21 +110,24 @@ function ResizableImageView({ node, updateAttributes, selected }: NodeViewProps)
         </div>
 
         {displaySrc ? (
-          <img
+          <video
             src={displaySrc}
-            alt={node.attrs.alt || ''}
-            className="w-full h-auto rounded-lg object-contain block pointer-events-none"
+            controls
+            playsInline
+            preload="metadata"
+            className="w-full h-auto rounded-lg object-contain block max-h-[500px]"
           />
         ) : (
-          <div className="w-full min-h-[140px] bg-[#E3DCD2]/40 rounded-lg flex items-center justify-center text-xs text-[#8C7B6E] p-4">
-            {isLoading ? 'Carregando imagem...' : 'Imagem indisponível'}
+          <div className="w-full min-h-[160px] bg-[#E3DCD2]/40 rounded-lg flex items-center justify-center text-xs text-[#8C7B6E] p-4 flex-col gap-1">
+            <Play className="w-6 h-6 text-[#8C7B6E]/70 mb-1" />
+            {isLoading ? 'Carregando vídeo...' : 'Vídeo indisponível'}
           </div>
         )}
 
-        {/* Resize handles positioned precisely on the bottom-left and bottom-right borders of the image */}
+        {/* Resize handles on bottom-right and bottom-left borders */}
         <div
           onMouseDown={(e) => handleStartResize(e, 'se')}
-          title="Arrastar para redimensionar imagem"
+          title="Arrastar para redimensionar vídeo"
           className={`absolute bottom-2 right-2 w-4 h-4 bg-[#8C7B6E] border-2 border-white rounded-full shadow-md cursor-se-resize z-20 flex items-center justify-center transition-opacity ${
             selected || resizing ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
           }`}
@@ -137,7 +138,7 @@ function ResizableImageView({ node, updateAttributes, selected }: NodeViewProps)
 
         <div
           onMouseDown={(e) => handleStartResize(e, 'sw')}
-          title="Arrastar para redimensionar imagem"
+          title="Arrastar para redimensionar vídeo"
           className={`absolute bottom-2 left-2 w-4 h-4 bg-[#8C7B6E] border-2 border-white rounded-full shadow-md cursor-sw-resize z-20 flex items-center justify-center transition-opacity ${
             selected || resizing ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
           }`}
@@ -146,7 +147,7 @@ function ResizableImageView({ node, updateAttributes, selected }: NodeViewProps)
           <div className="w-1 h-1 bg-white rounded-full" />
         </div>
 
-        {/* Quick size presets toolbar positioned on the top-right border of the image */}
+        {/* Quick size presets toolbar positioned on the top-right border */}
         <div
           className={`absolute top-2 right-2 bg-[#3D352E]/90 backdrop-blur-xs text-white text-[10px] px-2 py-0.5 rounded-md shadow-md flex items-center gap-2 z-20 transition-opacity ${
             selected || resizing
@@ -155,14 +156,6 @@ function ResizableImageView({ node, updateAttributes, selected }: NodeViewProps)
           }`}
           contentEditable={false}
         >
-          <button
-            type="button"
-            onClick={() => updateAttributes({ width: '25%' })}
-            className="hover:text-[#D9C5B2] cursor-pointer font-medium"
-          >
-            25%
-          </button>
-          <span className="text-[#8C7B6E]">•</span>
           <button
             type="button"
             onClick={() => updateAttributes({ width: '50%' })}
@@ -192,8 +185,8 @@ function ResizableImageView({ node, updateAttributes, selected }: NodeViewProps)
   );
 }
 
-export const ResizableImage = Node.create({
-  name: 'image',
+export const ResizableVideo = Node.create({
+  name: 'video',
   group: 'block',
   selectable: true,
   draggable: true,
@@ -203,15 +196,12 @@ export const ResizableImage = Node.create({
       src: {
         default: null,
       },
-      alt: {
-        default: null,
-      },
       title: {
         default: null,
       },
       width: {
-        default: '50%',
-        parseHTML: (element) => element.getAttribute('width') || element.style.width || '50%',
+        default: '75%',
+        parseHTML: (element) => element.getAttribute('width') || element.style.width || '75%',
         renderHTML: (attributes) => {
           if (!attributes.width) return {};
           return {
@@ -226,16 +216,16 @@ export const ResizableImage = Node.create({
   parseHTML() {
     return [
       {
-        tag: 'img[src]',
+        tag: 'video[src]',
       },
     ];
   },
 
   renderHTML({ HTMLAttributes }) {
-    return ['img', mergeAttributes(this.options.HTMLAttributes, HTMLAttributes)];
+    return ['video', mergeAttributes(this.options.HTMLAttributes, { controls: true }, HTMLAttributes)];
   },
 
   addNodeView() {
-    return ReactNodeViewRenderer(ResizableImageView);
+    return ReactNodeViewRenderer(ResizableVideoView);
   },
 });
