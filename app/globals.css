@@ -314,17 +314,19 @@
 .ProseMirror details {
   position: relative;
   margin: 0.25rem 0;
-  padding-left: 1.5rem; /* Espaço reservado para a seta independente */
+  padding-left: 1.75rem; /* Espaço reservado para a seta confortável de 24x24px */
 }
 
-/* Botão da seta independente perfeitamente alinhado à esquerda do Summary */
+/* Botão da seta independente perfeitamente alinhado à esquerda do Summary (24x24px) */
 .ProseMirror div[data-type="details"] > button.details-toggle-btn,
 .ProseMirror div[data-type="details"] > button {
   position: absolute;
   left: 0;
-  top: 0.125rem;
-  width: 1.25rem;
-  height: 1.25rem;
+  top: 0;
+  width: 1.5rem;
+  height: 1.5rem;
+  min-width: 1.5rem;
+  min-height: 1.5rem;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -343,6 +345,21 @@
 .ProseMirror div[data-type="details"] > button:hover {
   background-color: #E3DCD2;
   color: #3D352E;
+}
+
+/* Ícone chevron do toggle: 16x16px com rotação suave de 0deg a 90deg */
+.details-chevron-icon {
+  width: 16px;
+  height: 16px;
+  display: block;
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  transform: rotate(0deg);
+  transform-origin: center;
+}
+
+.ProseMirror div[data-type="details"].is-open > button.details-toggle-btn .details-chevron-icon,
+.ProseMirror div[data-type="details"].is-open > button .details-chevron-icon {
+  transform: rotate(90deg);
 }
 
 /* Summary / Cabeçalho do toggle editável */

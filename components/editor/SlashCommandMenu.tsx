@@ -32,6 +32,7 @@ interface CommandItem {
   id: string;
   title: string;
   description: string;
+  keywords?: string[];
   icon: React.ComponentType<{ className?: string }>;
   action: (editor: Editor) => void;
 }
@@ -52,6 +53,7 @@ export function SlashCommandMenu({
       id: 'paragraph',
       title: 'Texto / Parágrafo',
       description: 'Comece a escrever com texto normal',
+      keywords: ['texto', 'paragrafo', 'p', 'normal'],
       icon: Type,
       action: (ed) => ed.chain().focus().setParagraph().run(),
     },
@@ -59,6 +61,7 @@ export function SlashCommandMenu({
       id: 'heading-1',
       title: 'Título 1',
       description: 'Seção principal com destaque',
+      keywords: ['h1', 'titulo', 'header', 'grande'],
       icon: Heading1,
       action: (ed) => ed.chain().focus().toggleHeading({ level: 1 }).run(),
     },
@@ -66,6 +69,7 @@ export function SlashCommandMenu({
       id: 'heading-2',
       title: 'Título 2',
       description: 'Subseção média',
+      keywords: ['h2', 'subtitulo', 'medio'],
       icon: Heading2,
       action: (ed) => ed.chain().focus().toggleHeading({ level: 2 }).run(),
     },
@@ -73,13 +77,15 @@ export function SlashCommandMenu({
       id: 'heading-3',
       title: 'Título 3',
       description: 'Subtítulo pequeno',
+      keywords: ['h3', 'subtitulo', 'pequeno'],
       icon: Heading3,
       action: (ed) => ed.chain().focus().toggleHeading({ level: 3 }).run(),
     },
     {
       id: 'toggle-list',
       title: 'Lista Recolhível / Toggle',
-      description: 'Crie um bloco expansível para ocultar e exibir conteúdo',
+      description: 'Crie um bloco expansível para ocultar e exibir conteúdo (/toggle)',
+      keywords: ['toggle', 'toggle-list', 'detalhes', 'details', 'recolhivel', 'expansivel', 'dropdown', 'colapsar', 'acordeao'],
       icon: ListCollapse,
       action: (ed) => (ed.chain().focus() as any).setDetails().run(),
     },
@@ -87,6 +93,7 @@ export function SlashCommandMenu({
       id: 'task-list',
       title: 'Checklist / Tarefas',
       description: 'Acompanhe itens a fazer',
+      keywords: ['todo', 'task', 'checklist', 'tarefa', 'afazer'],
       icon: CheckSquare,
       action: (ed) => ed.chain().focus().toggleTaskList().run(),
     },
@@ -94,6 +101,7 @@ export function SlashCommandMenu({
       id: 'bullet-list',
       title: 'Lista com Marcadores',
       description: 'Crie uma lista simples de itens',
+      keywords: ['bullet', 'lista', 'pontos', 'marcador', 'ul'],
       icon: List,
       action: (ed) => ed.chain().focus().toggleBulletList().run(),
     },
@@ -101,6 +109,7 @@ export function SlashCommandMenu({
       id: 'ordered-list',
       title: 'Lista Numerada',
       description: 'Crie uma lista em ordem sequencial',
+      keywords: ['numero', 'ordem', 'ordenada', 'sequencia', 'ol', '1.'],
       icon: ListOrdered,
       action: (ed) => ed.chain().focus().toggleOrderedList().run(),
     },
@@ -108,6 +117,7 @@ export function SlashCommandMenu({
       id: 'blockquote',
       title: 'Citação',
       description: 'Destaque uma citação ou reflexão',
+      keywords: ['quote', 'citacao', 'frase'],
       icon: Quote,
       action: (ed) => ed.chain().focus().toggleBlockquote().run(),
     },
@@ -115,6 +125,7 @@ export function SlashCommandMenu({
       id: 'code-block',
       title: 'Bloco de Código',
       description: 'Trecho de código com fonte monoespaçada',
+      keywords: ['codigo', 'code', 'javascript', 'typescript', 'python', 'pre'],
       icon: Code,
       action: (ed) => ed.chain().focus().toggleCodeBlock().run(),
     },
@@ -122,6 +133,7 @@ export function SlashCommandMenu({
       id: 'table',
       title: 'Tabela',
       description: 'Insira uma tabela com linhas e colunas',
+      keywords: ['tabela', 'grid', 'table', 'planilha'],
       icon: TableIcon,
       action: (ed) => ed.chain().focus().insertTable({ rows: 3, cols: 3, withHeaderRow: true }).run(),
     },
@@ -129,6 +141,7 @@ export function SlashCommandMenu({
       id: 'youtube',
       title: 'Vídeo do YouTube',
       description: 'Incorpore um player de vídeo',
+      keywords: ['youtube', 'video', 'player', 'midia'],
       icon: Youtube,
       action: (ed) => {
         const url = prompt('Cole a URL do vídeo do YouTube:');
@@ -141,6 +154,7 @@ export function SlashCommandMenu({
       id: 'image',
       title: 'Inserir Imagem',
       description: 'Insira uma imagem do computador',
+      keywords: ['imagem', 'foto', 'picture', 'upload', 'figura'],
       icon: ImageIcon,
       action: (ed) => {
         if (onTriggerImageUpload) {
@@ -157,6 +171,7 @@ export function SlashCommandMenu({
       id: 'math-block',
       title: 'Equação LaTeX',
       description: 'Insira equação matemática',
+      keywords: ['math', 'latex', 'formula', 'equacao', 'sigma'],
       icon: Sigma,
       action: (ed) => {
         ed.chain().focus().setCodeBlock({ language: 'latex' }).run();
@@ -166,15 +181,33 @@ export function SlashCommandMenu({
       id: 'divider',
       title: 'Linha Divisória',
       description: 'Separe seções visualmente',
+      keywords: ['linha', 'divisor', 'separador', 'hr', 'divider'],
       icon: Minus,
       action: (ed) => ed.chain().focus().setHorizontalRule().run(),
     },
   ];
 
+  const cleanQuery = query.trim().toLowerCase().replace(/^\//, '');
+
   const filtered = commands.filter((c) =>
-    c.title.toLowerCase().includes(query.toLowerCase()) ||
-    c.description.toLowerCase().includes(query.toLowerCase())
+    c.title.toLowerCase().includes(cleanQuery) ||
+    c.description.toLowerCase().includes(cleanQuery) ||
+    (c.keywords && c.keywords.some((k) => k.toLowerCase().includes(cleanQuery)))
   );
+
+  const executeCommand = (item: CommandItem) => {
+    if (editor) {
+      const { state } = editor;
+      const { $from } = state.selection;
+      // Se o caractere imediatamente anterior for '/', remove antes de inserir o bloco
+      const textBefore = state.doc.textBetween(Math.max(0, $from.pos - 1), $from.pos);
+      if (textBefore === '/') {
+        editor.chain().deleteRange({ from: $from.pos - 1, to: $from.pos }).run();
+      }
+      item.action(editor);
+      onClose();
+    }
+  };
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -188,9 +221,8 @@ export function SlashCommandMenu({
         setSelectedIndex((prev) => (prev - 1 + filtered.length) % (filtered.length || 1));
       } else if (e.key === 'Enter') {
         e.preventDefault();
-        if (filtered[selectedIndex] && editor) {
-          filtered[selectedIndex].action(editor);
-          onClose();
+        if (filtered[selectedIndex]) {
+          executeCommand(filtered[selectedIndex]);
         }
       } else if (e.key === 'Escape') {
         e.preventDefault();

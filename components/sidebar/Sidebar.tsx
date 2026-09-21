@@ -45,6 +45,7 @@ interface SidebarProps {
   onCreateNote: (parentId?: string | null) => void;
   onRenameNode: (nodeId: string, newName: string) => void;
   onDeleteNode: (nodeId: string) => void;
+  onSetNodeColor?: (nodeId: string, color: string | null) => void;
   onDuplicateNote: (nodeId: string) => void;
   onToggleFavorite: (nodeId: string) => void;
   onExportNote: (nodeId: string) => void;
@@ -71,6 +72,7 @@ export function Sidebar({
   onCreateNote,
   onRenameNode,
   onDeleteNode,
+  onSetNodeColor,
   onDuplicateNote,
   onToggleFavorite,
   onExportNote,
@@ -885,6 +887,7 @@ export function Sidebar({
                       onCreateChildFolder={onCreateFolder}
                       onRenameNode={onRenameNode}
                       onDeleteNode={onDeleteNode}
+                      onSetNodeColor={onSetNodeColor}
                       onDuplicateNote={onDuplicateNote}
                       onToggleFavorite={onToggleFavorite}
                       onExportNote={onExportNote}
@@ -1111,7 +1114,7 @@ export function Sidebar({
             )}
             {syncStatus === 'offline' && (
               <span className="flex items-center gap-1.5 text-[11px] text-[#8C7B6E]" title="Suas alterações continuam sendo salvas neste dispositivo">
-                <WifiOff className="w-3.5 h-3.5" /> Offline — salvo neste dispositivo
+                <WifiOff className="w-3.5 h-3.5" /> Offline (salvo localmente)
               </span>
             )}
             {syncStatus === 'error' && (

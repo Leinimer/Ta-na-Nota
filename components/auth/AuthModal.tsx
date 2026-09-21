@@ -321,7 +321,7 @@ export function AuthModal({
                     )}
                     {syncStatus === 'offline' && (
                       <span className="text-[#8C7B6E] flex items-center gap-1">
-                        <WifiOff className="w-3.5 h-3.5" /> Offline — salvo neste dispositivo
+                        <WifiOff className="w-3.5 h-3.5" /> Offline (salvo localmente)
                       </span>
                     )}
                     {syncStatus === 'error' && (

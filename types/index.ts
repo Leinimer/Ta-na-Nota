@@ -20,6 +20,7 @@ export interface TreeNode {
   type: NodeType;
   name: string;
   position: number;
+  color?: string | null;
   createdAt: string;
   updatedAt: string;
   deletedAt?: string | null;

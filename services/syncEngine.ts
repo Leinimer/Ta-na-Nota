@@ -153,6 +153,12 @@ class SyncEngineClass {
   }
 
   private emitStatus(status: SyncStatus) {
+    if (!this.isOnline || (typeof navigator !== 'undefined' && !navigator.onLine)) {
+      status = 'offline';
+    } else if (status === 'saved' && (this.inFlightNotes.size > 0 || this.inFlightNodes.size > 0)) {
+      status = 'saving';
+    }
+
     this.currentStatus = status;
     for (const listener of this.statusListeners) {
       try {
@@ -641,6 +647,7 @@ class SyncEngineClass {
         parent_id: canonicalParentId,
         type: effectiveNode.type,
         name: effectiveNode.name || (effectiveNode.type === 'folder' ? 'Nova pasta' : 'Sem título'),
+        color: effectiveNode.color ?? null,
         position: Number(effectiveNode.position || 1000),
         updated_at: localUpdatedAt,
         deleted_at: effectiveNode.deletedAt || null,
@@ -806,6 +813,89 @@ class SyncEngineClass {
       return;
     }
 
+    this.emitStatus('saving');
+    this.triggerQueueProcessing(50);
+  }
+
+  /**
+   * Enfileira persistência de uma tag na fila local durável do IndexedDB (`sync_queue`).
+   */
+  async enqueueTag(tag: TagRecord, operation: 'upsert' | 'delete' = 'upsert'): Promise<void> {
+    const userId = tag.userId;
+    const versionTimestamp = new Date(tag.createdAt || new Date().toISOString()).getTime();
+
+    const queueItem: SyncQueueItem = {
+      id: `sync_tag_${tag.id}`,
+      userId,
+      entityType: 'tag',
+      entityId: tag.id,
+      operation,
+      payload: tag,
+      version: versionTimestamp,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      attempts: 0,
+      nextAttemptAt: 0,
+      status: 'pending',
+    };
+
+    try {
+      await indexedDbService.enqueueSyncItem(queueItem);
+      console.log('[QUEUE ENQUEUED TAG]', {
+        tagId: tag.id,
+        name: tag.name,
+        operation,
+      });
+    } catch (err) {
+      console.warn('[SyncEngine] Falha ao persistir tag na fila do IndexedDB:', err);
+    }
+
+    if (!this.isOnline) {
+      this.emitStatus('offline');
+      return;
+    }
+
+    this.emitStatus('saving');
+    this.triggerQueueProcessing(50);
+  }
+
+  /**
+   * Enfileira relações note_tags na fila local durável do IndexedDB (`sync_queue`).
+   */
+  async enqueueNoteTags(userId: string, noteId: string, tagIds: string[]): Promise<void> {
+    const versionTimestamp = Date.now();
+
+    const queueItem: SyncQueueItem = {
+      id: `sync_notetags_${noteId}`,
+      userId,
+      entityType: 'note_tags',
+      entityId: noteId,
+      operation: 'upsert',
+      payload: { noteId, tagIds },
+      version: versionTimestamp,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      attempts: 0,
+      nextAttemptAt: 0,
+      status: 'pending',
+    };
+
+    try {
+      await indexedDbService.enqueueSyncItem(queueItem);
+      console.log('[QUEUE ENQUEUED NOTE_TAGS]', {
+        noteId,
+        count: tagIds.length,
+      });
+    } catch (err) {
+      console.warn('[SyncEngine] Falha ao persistir note_tags na fila do IndexedDB:', err);
+    }
+
+    if (!this.isOnline) {
+      this.emitStatus('offline');
+      return;
+    }
+
+    this.emitStatus('saving');
     this.triggerQueueProcessing(50);
   }
 
@@ -1743,11 +1833,15 @@ class SyncEngineClass {
                 success = true;
               }
             } else if (item.entityType === 'tag') {
-              const tag = item.payload;
-              if (tag) {
-                success = await this.syncTag(tag);
+              if (item.operation === 'delete') {
+                success = await this.deleteTagRemote(item.entityId);
               } else {
-                success = true;
+                const tag = item.payload;
+                if (tag) {
+                  success = await this.syncTag(tag);
+                } else {
+                  success = true;
+                }
               }
             } else if (item.entityType === 'note_tags') {
               const { noteId, tagIds } = item.payload || {};
@@ -2175,6 +2269,42 @@ class SyncEngineClass {
   }
 
   /**
+   * Remove uma tag do Supabase.
+   */
+  async deleteTagRemote(tagId: string): Promise<boolean> {
+    const supabase = getSupabase();
+    if (!supabase || !isSupabaseConfigured || !this.isOnline) return false;
+    const authUserId = await this.getAuthenticatedUserId();
+    if (!authUserId) return false;
+    const canonicalTagId = toCanonicalUuid(tagId);
+
+    try {
+      const { error } = await supabase
+        .from('tags')
+        .delete()
+        .eq('id', canonicalTagId)
+        .eq('user_id', authUserId);
+
+      if (error) {
+        if (isNetworkError(error) || classifySyncError(error) === 'NETWORK') {
+          this.handleNetworkDisconnection('delete_tag_remote', { tagId, error });
+          return false;
+        }
+        console.error('[SYNC FAILED]', { entityType: 'tag', entityId: tagId, operation: 'delete', error });
+        return false;
+      }
+      console.log('[SYNC SUCCESS]', { entityType: 'tag', entityId: tagId, operation: 'delete' });
+      return true;
+    } catch (err: any) {
+      if (isNetworkError(err) || classifySyncError(err) === 'NETWORK') {
+        this.handleNetworkDisconnection('delete_tag_remote_exception', { tagId, error: err });
+        return false;
+      }
+      return false;
+    }
+  }
+
+  /**
    * Sincroniza relações note_tags no Supabase de forma estritamente DIFERENCIAL.
    * Se os IDs de tags da nota não mudaram em relação ao último envio, NÃO executa DELETE nem INSERT.
    * Verifica estritamente que as operações no banco foram concluídas com sucesso.
@@ -2469,7 +2599,7 @@ class SyncEngineClass {
       const [nodesRes, notesRes, tagsRes, noteTagsRes, linksRes, attachmentsRes] = await Promise.all([
         supabase
           .from('nodes')
-          .select('id, user_id, parent_id, type, name, position, created_at, updated_at, deleted_at')
+          .select('id, user_id, parent_id, type, name, color, position, created_at, updated_at, deleted_at')
           .eq('user_id', authUserId)
           .order('position', { ascending: true }),
         supabase
@@ -2582,6 +2712,7 @@ class SyncEngineClass {
                 parentId: d.parent_id,
                 type: d.type,
                 name: d.name,
+                color: d.color ?? null,
                 position: Number(d.position),
                 createdAt: d.created_at,
                 updatedAt: d.updated_at || d.deleted_at,
@@ -2614,6 +2745,7 @@ class SyncEngineClass {
             parentId: d.parent_id,
             type: d.type,
             name: d.name,
+            color: d.color ?? null,
             position: Number(d.position),
             createdAt: d.created_at,
             updatedAt: d.updated_at,
@@ -2772,6 +2904,13 @@ class SyncEngineClass {
 
       // 3. Hidrata tags
       if (!tagsRes.error) {
+        const remoteTagIdSet = new Set(remoteTags.map((t: any) => t.id));
+        const localTags = await indexedDbService.getTags(authUserId);
+        for (const lt of localTags) {
+          if (!remoteTagIdSet.has(lt.id)) {
+            await indexedDbService.deleteTag(lt.id);
+          }
+        }
         for (const t of remoteTags) {
           const tag: TagRecord = {
             id: t.id,
@@ -2792,9 +2931,23 @@ class SyncEngineClass {
           list.push(nt.tag_id);
           tagMapByNote.set(nt.note_id, list);
         }
+        // Atualiza todas as notas locais para garantir que notas cujas tags foram removidas remotamente fiquem vazias
+        const allLocalNotes = await indexedDbService.getAllNotes(authUserId);
+        const processedNoteIds = new Set<string>();
+
+        for (const note of allLocalNotes) {
+          const tIds = tagMapByNote.get(note.id) || tagMapByNote.get(note.nodeId) || [];
+          await indexedDbService.setNoteTags(authUserId, note.id, tIds);
+          this.lastSyncedTags.set(toCanonicalUuid(note.id), [...tIds].map(toCanonicalUuid).sort().join(','));
+          processedNoteIds.add(note.id);
+          if (note.nodeId) processedNoteIds.add(note.nodeId);
+        }
+
         for (const [nId, tIds] of tagMapByNote.entries()) {
-          await indexedDbService.setNoteTags(authUserId, nId, tIds);
-          this.lastSyncedTags.set(toCanonicalUuid(nId), [...tIds].map(toCanonicalUuid).sort().join(','));
+          if (!processedNoteIds.has(nId)) {
+            await indexedDbService.setNoteTags(authUserId, nId, tIds);
+            this.lastSyncedTags.set(toCanonicalUuid(nId), [...tIds].map(toCanonicalUuid).sort().join(','));
+          }
         }
       }
 

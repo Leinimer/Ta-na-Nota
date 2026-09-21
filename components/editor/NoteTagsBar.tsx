@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { TagRecord } from '@/types';
 import { tagService } from '@/services/tagService';
+import { realtimeService } from '@/services/realtimeService';
 import { Plus, X, Search, Check } from 'lucide-react';
 
 interface NoteTagsBarProps {
@@ -45,8 +46,20 @@ export function NoteTagsBar({
       }
     }
     loadTags();
+
+    // Listener Realtime: atualiza instantaneamente se houver mudanças em tags ou note_tags em outro dispositivo
+    const unsubscribe = realtimeService.addListener((event) => {
+      if (
+        event.type === 'tag' ||
+        (event.type === 'relation' && event.table === 'note_tags')
+      ) {
+        loadTags();
+      }
+    });
+
     return () => {
       isMounted = false;
+      unsubscribe();
     };
   }, [noteId, userId]);
 
@@ -98,6 +111,12 @@ export function NoteTagsBar({
       setNoteTags(updated);
       await refreshAllTags();
       setSearchQuery('');
+      realtimeService.notifyListeners({
+        type: 'relation',
+        table: 'note_tags',
+        eventType: 'INSERT',
+        record: { note_id: noteId, user_id: userId },
+      });
       if (onTagsUpdated) onTagsUpdated();
     } catch (err) {
       console.warn('Error adding tag:', err);
@@ -111,6 +130,12 @@ export function NoteTagsBar({
       const updated = await tagService.removeTagFromNote(userId, noteId, tagId);
       setNoteTags(updated);
       await refreshAllTags();
+      realtimeService.notifyListeners({
+        type: 'relation',
+        table: 'note_tags',
+        eventType: 'DELETE',
+        record: { note_id: noteId, user_id: userId },
+      });
       if (onTagsUpdated) onTagsUpdated();
     } catch (err) {
       console.warn('Error removing tag:', err);

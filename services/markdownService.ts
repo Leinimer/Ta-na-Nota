@@ -213,53 +213,129 @@ export class MarkdownService {
         continue;
       }
 
-      // 7. Bullet List: - or *
-      if (/^[-*+]\s+(.*)$/.test(line.trim()) && !/^[-*+]\s+\[([ xX])\]/.test(line.trim())) {
-        const listItems: any[] = [];
+      // 7. Bullet List & Nested Lists
+      if (/^(\s*)[-*+]\s+(.*)$/.test(line) && !/^\s*[-*+]\s+\[([ xX])\]/.test(line)) {
+        const listLines: { indent: number; text: string }[] = [];
         while (
           i < lines.length &&
-          /^[-*+]\s+(.*)$/.test(lines[i].trim()) &&
-          !/^[-*+]\s+\[([ xX])\]/.test(lines[i].trim())
+          /^(\s*)[-*+]\s+(.*)$/.test(lines[i]) &&
+          !/^\s*[-*+]\s+\[([ xX])\]/.test(lines[i])
         ) {
-          const match = lines[i].trim().match(/^[-*+]\s+(.*)$/);
-          if (match) {
-            listItems.push({
-              type: 'listItem',
-              content: [{
-                type: 'paragraph',
-                content: this.parseInlineText(match[1]),
-              }],
+          const m = lines[i].match(/^(\s*)[-*+]\s+(.*)$/);
+          if (m) {
+            listLines.push({
+              indent: m[1].replace(/\t/g, '  ').length,
+              text: m[2],
             });
           }
           i++;
         }
-        content.push({
-          type: 'bulletList',
-          content: listItems,
-        });
+
+        const buildBulletList = (items: { indent: number; text: string }[]): any => {
+          if (!items.length) return null;
+          const rootIndent = items[0].indent;
+          const result: any[] = [];
+          let currentItem: any = null;
+          let subItems: { indent: number; text: string }[] = [];
+
+          const flushSub = () => {
+            if (currentItem && subItems.length > 0) {
+              const subList = buildBulletList(subItems);
+              if (subList) {
+                currentItem.content.push(subList);
+              }
+              subItems = [];
+            }
+          };
+
+          for (const it of items) {
+            if (it.indent <= rootIndent) {
+              flushSub();
+              currentItem = {
+                type: 'listItem',
+                content: [{
+                  type: 'paragraph',
+                  content: this.parseInlineText(it.text),
+                }],
+              };
+              result.push(currentItem);
+            } else {
+              subItems.push(it);
+            }
+          }
+          flushSub();
+
+          return {
+            type: 'bulletList',
+            content: result,
+          };
+        };
+
+        const parsed = buildBulletList(listLines);
+        if (parsed) {
+          content.push(parsed);
+        }
         continue;
       }
 
-      // 8. Ordered List: 1. 2.
-      if (/^\d+\.\s+(.*)$/.test(line.trim())) {
-        const listItems: any[] = [];
-        while (i < lines.length && /^\d+\.\s+(.*)$/.test(lines[i].trim())) {
-          const match = lines[i].trim().match(/^\d+\.\s+(.*)$/);
-          if (match) {
-            listItems.push({
-              type: 'listItem',
-              content: [{
-                type: 'paragraph',
-                content: this.parseInlineText(match[1]),
-              }],
+      // 8. Ordered List & Nested Lists
+      if (/^(\s*)\d+\.\s+(.*)$/.test(line)) {
+        const listLines: { indent: number; text: string }[] = [];
+        while (i < lines.length && /^(\s*)\d+\.\s+(.*)$/.test(lines[i])) {
+          const m = lines[i].match(/^(\s*)\d+\.\s+(.*)$/);
+          if (m) {
+            listLines.push({
+              indent: m[1].replace(/\t/g, '  ').length,
+              text: m[2],
             });
           }
           i++;
         }
-        content.push({
-          type: 'orderedList',
-          content: listItems,
-        });
+
+        const buildOrderedList = (items: { indent: number; text: string }[]): any => {
+          if (!items.length) return null;
+          const rootIndent = items[0].indent;
+          const result: any[] = [];
+          let currentItem: any = null;
+          let subItems: { indent: number; text: string }[] = [];
+
+          const flushSub = () => {
+            if (currentItem && subItems.length > 0) {
+              const subList = buildOrderedList(subItems);
+              if (subList) {
+                currentItem.content.push(subList);
+              }
+              subItems = [];
+            }
+          };
+
+          for (const it of items) {
+            if (it.indent <= rootIndent) {
+              flushSub();
+              currentItem = {
+                type: 'listItem',
+                content: [{
+                  type: 'paragraph',
+                  content: this.parseInlineText(it.text),
+                }],
+              };
+              result.push(currentItem);
+            } else {
+              subItems.push(it);
+            }
+          }
+          flushSub();
+
+          return {
+            type: 'orderedList',
+            content: result,
+          };
+        };
+
+        const parsed = buildOrderedList(listLines);
+        if (parsed) {
+          content.push(parsed);
+        }
         continue;
       }
 
@@ -307,30 +383,43 @@ export class MarkdownService {
 
       // 10. Details / Toggle Block: <details ...> ... </details>
       if (line.trim().startsWith('<details')) {
-        const hasOpen = /<details\s+[^>]*open/i.test(line.trim()) || /<details\s+open>/i.test(line.trim());
-        const detailLines: string[] = [];
-        i++;
-        while (i < lines.length && !lines[i].trim().startsWith('</details>')) {
-          detailLines.push(lines[i]);
-          i++;
-        }
-        if (i < lines.length && lines[i].trim().startsWith('</details>')) {
-          i++;
+        const fullBlockLines: string[] = [];
+        let openCount = 0;
+        let lineIdx = i;
+
+        while (lineIdx < lines.length) {
+          const l = lines[lineIdx];
+          const opens = (l.match(/<details\b/gi) || []).length;
+          const closes = (l.match(/<\/details>/gi) || []).length;
+          openCount += (opens - closes);
+          fullBlockLines.push(l);
+          lineIdx++;
+          if (openCount <= 0) break;
         }
 
-        let summaryText = 'Toggle';
-        const innerLines: string[] = [];
-        for (const dLine of detailLines) {
-          const sumMatch = dLine.match(/<summary>(.*?)<\/summary>/i);
-          if (sumMatch) {
-            summaryText = sumMatch[1];
-          } else if (dLine.trim()) {
-            innerLines.push(dLine);
-          }
+        i = lineIdx;
+
+        const fullBlockText = fullBlockLines.join('\n');
+        const hasOpen = /<details\s+[^>]*open/i.test(fullBlockLines[0]) || /<details\s+open>/i.test(fullBlockLines[0]);
+
+        const summaryMatch = fullBlockText.match(/<summary>([\s\S]*?)<\/summary>/i);
+        const summaryText = summaryMatch ? summaryMatch[1].trim() : 'Toggle';
+
+        let innerText = fullBlockText
+          .replace(/<details[^>]*>/i, '')
+          .replace(/<summary>[\s\S]*?<\/summary>/i, '');
+        const lastCloseIndex = innerText.lastIndexOf('</details>');
+        if (lastCloseIndex !== -1) {
+          innerText = innerText.slice(0, lastCloseIndex);
         }
 
-        const innerContent = innerLines.length > 0
-          ? innerLines.map((txt) => ({
+        const innerParagraphs = innerText
+          .split('\n')
+          .map((l) => l.trim())
+          .filter((l) => l.length > 0);
+
+        const innerContent = innerParagraphs.length > 0
+          ? innerParagraphs.map((txt) => ({
               type: 'paragraph',
               content: this.parseInlineText(txt),
             }))
@@ -493,8 +582,17 @@ export class MarkdownService {
       case 'bulletList': {
         return (node.content || [])
           .map((item: any) => {
-            const itemText = this.renderNodes(item.content || []);
-            return `- ${itemText}`;
+            const blocks = item.content || [];
+            if (!blocks.length) return '- ';
+            const firstText = this.renderNodes([blocks[0]]);
+            if (blocks.length > 1) {
+              const subText = this.renderNodes(blocks.slice(1))
+                .split('\n')
+                .map((l: string) => `  ${l}`)
+                .join('\n');
+              return `- ${firstText}\n${subText}`;
+            }
+            return `- ${firstText}`;
           })
           .join('\n');
       }
@@ -502,8 +600,17 @@ export class MarkdownService {
       case 'orderedList': {
         return (node.content || [])
           .map((item: any, idx: number) => {
-            const itemText = this.renderNodes(item.content || []);
-            return `${idx + 1}. ${itemText}`;
+            const blocks = item.content || [];
+            if (!blocks.length) return `${idx + 1}. `;
+            const firstText = this.renderNodes([blocks[0]]);
+            if (blocks.length > 1) {
+              const subText = this.renderNodes(blocks.slice(1))
+                .split('\n')
+                .map((l: string) => `  ${l}`)
+                .join('\n');
+              return `${idx + 1}. ${firstText}\n${subText}`;
+            }
+            return `${idx + 1}. ${firstText}`;
           })
           .join('\n');
       }

@@ -12,6 +12,7 @@ import { TaskItem } from '@tiptap/extension-task-item';
 import { Highlight } from '@tiptap/extension-highlight';
 import { Placeholder } from '@tiptap/extension-placeholder';
 import { CustomDetails, CustomDetailsContent, DetailsSummary } from './extensions/CustomDetails';
+import { ListKeymap } from './extensions/ListKeymap';
 
 import { TreeNode, NoteRecord, BacklinkItem, AttachmentRecord, SyncStatus } from '@/types';
 import { TextSelection } from '@tiptap/pm/state';
@@ -307,6 +308,7 @@ export function NoteEditor({
         TaskItem.configure({
           nested: true,
         }),
+        ListKeymap,
         Highlight.configure({
           multicolor: true,
         }),

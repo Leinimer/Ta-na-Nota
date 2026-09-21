@@ -122,9 +122,7 @@ export const CustomDetails = Details.extend({
 
       const updateButtonVisual = (openState: boolean) => {
         toggle.setAttribute('aria-label', openState ? 'Recolher toggle' : 'Expandir toggle');
-        toggle.innerHTML = openState
-          ? `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="m7 10 5 5 5-5z"/></svg>`
-          : `<svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><path d="m10 17 5-5-5-5z"/></svg>`;
+        toggle.innerHTML = `<svg class="details-chevron-icon" xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>`;
       };
 
       updateButtonVisual(isOpen);
@@ -340,6 +338,7 @@ export const CustomDetails = Details.extend({
 });
 
 export const CustomDetailsContent = DetailsContent.extend({
+  content: 'block+',
   addNodeView() {
     return ({ HTMLAttributes }) => {
       const dom = document.createElement('div');

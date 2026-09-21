@@ -16,11 +16,27 @@ import {
   Star,
   Download,
   FolderPlus,
+  Palette,
+  Check,
 } from 'lucide-react';
+
+export const FOLDER_PALETTE = [
+  { id: 'default', label: 'Padrão (Tema)', value: null, hex: '#8C7B6E' },
+  { id: 'gray', label: 'Cinza suave', value: '#78716C', hex: '#78716C' },
+  { id: 'brown', label: 'Caramelo suave', value: '#A27B5C', hex: '#A27B5C' },
+  { id: 'orange', label: 'Laranja suave', value: '#EA580C', hex: '#EA580C' },
+  { id: 'yellow', label: 'Amarelo suave', value: '#D97706', hex: '#D97706' },
+  { id: 'green', label: 'Verde suave', value: '#16A34A', hex: '#16A34A' },
+  { id: 'blue', label: 'Azul suave', value: '#2563EB', hex: '#2563EB' },
+  { id: 'purple', label: 'Roxo suave', value: '#7C3AED', hex: '#7C3AED' },
+  { id: 'pink', label: 'Rosa suave', value: '#DB2777', hex: '#DB2777' },
+  { id: 'red', label: 'Vermelho suave', value: '#DC2626', hex: '#DC2626' },
+];
 
 interface TreeNodeItemProps {
   node: TreeNode;
   level?: number;
+  parentColor?: string | null;
   activeNodeId: string | null;
   expandedFolders: Set<string>;
   editingNodeId?: string | null;
@@ -33,6 +49,7 @@ interface TreeNodeItemProps {
   onCreateChildFolder: (parentId: string) => void;
   onRenameNode: (nodeId: string, newName: string) => void;
   onDeleteNode: (nodeId: string) => void;
+  onSetNodeColor?: (nodeId: string, color: string | null) => void;
   onDuplicateNote: (nodeId: string) => void;
   onToggleFavorite: (nodeId: string) => void;
   onExportNote: (nodeId: string) => void;
@@ -43,6 +60,7 @@ interface TreeNodeItemProps {
 export function TreeNodeItem({
   node,
   level = 0,
+  parentColor = null,
   activeNodeId,
   expandedFolders,
   editingNodeId,
@@ -55,6 +73,7 @@ export function TreeNodeItem({
   onCreateChildFolder,
   onRenameNode,
   onDeleteNode,
+  onSetNodeColor,
   onDuplicateNote,
   onToggleFavorite,
   onExportNote,
@@ -65,7 +84,11 @@ export function TreeNodeItem({
   const isEditing = isLocalEditing || editingNodeId === node.id;
   const [editName, setEditName] = useState(node.name);
   const [showMenu, setShowMenu] = useState(false);
+  const [showColorSubmenu, setShowColorSubmenu] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+
+  // Resolução hierárquica visual: se o nó tem cor própria, prevalece; senão, herda do pai
+  const effectiveColor = node.color || parentColor || null;
 
   // Sync editName when node.name updates and we are not currently editing
   const [prevNodeName, setPrevNodeName] = useState(node.name);
@@ -214,13 +237,19 @@ export function TreeNodeItem({
           <span className="w-4 h-4" />
         )}
 
-        {/* Icon */}
-        <span className="text-[#8C7B6E] shrink-0">
+        {/* Folder Icon with resolved effectiveColor or Note Icon */}
+        <span className="shrink-0 flex items-center justify-center">
           {isFolder ? (
             isExpanded ? (
-              <FolderOpen className="w-4 h-4 text-[#8C7B6E]" />
+              <FolderOpen
+                className="w-4 h-4 transition-colors"
+                style={{ color: effectiveColor || '#8C7B6E' }}
+              />
             ) : (
-              <Folder className="w-4 h-4 text-[#8C7B6E]" />
+              <Folder
+                className="w-4 h-4 transition-colors"
+                style={{ color: effectiveColor || '#8C7B6E' }}
+              />
             )
           ) : (
             <FileText className="w-4 h-4 text-[#8C7B6E]" />
@@ -252,6 +281,15 @@ export function TreeNodeItem({
           </span>
         )}
 
+        {/* Explicit Color Dot for folders that define their own color */}
+        {isFolder && node.color && (
+          <span
+            className="w-2 h-2 rounded-full border border-black/10 shrink-0"
+            style={{ backgroundColor: node.color }}
+            title={`Cor da pasta: ${node.color}`}
+          />
+        )}
+
         {/* Favorite indicator for notes */}
         {!isFolder && node.isFavorite && (
           <Star className="w-3 h-3 fill-amber-500 text-amber-500 shrink-0" />
@@ -277,6 +315,7 @@ export function TreeNodeItem({
             aria-label="Mais ações"
             onClick={(e) => {
               e.stopPropagation();
+              setShowColorSubmenu(false);
               setShowMenu(!showMenu);
             }}
             className="p-1.5 text-[#8C7B6E] hover:text-[#3D352E] hover:bg-[#D9C5B2]/50 rounded cursor-pointer min-w-[28px] min-h-[28px] flex items-center justify-center"
@@ -288,9 +327,15 @@ export function TreeNodeItem({
         {/* Context Dropdown */}
         {showMenu && (
           <>
-            <div className="fixed inset-0 z-30" onClick={() => setShowMenu(false)} />
             <div
-              className="absolute right-2 top-full mt-1 z-40 w-48 bg-[#FEFDFA] border border-[#E3DCD2] rounded-lg shadow-lg py-1 text-xs text-[#3D352E] animate-in fade-in zoom-in-95 duration-100"
+              className="fixed inset-0 z-30"
+              onClick={() => {
+                setShowMenu(false);
+                setShowColorSubmenu(false);
+              }}
+            />
+            <div
+              className="absolute right-2 top-full mt-1 z-40 w-52 bg-[#FEFDFA] border border-[#E3DCD2] rounded-lg shadow-lg py-1 text-xs text-[#3D352E] animate-in fade-in zoom-in-95 duration-100"
               onClick={(e) => e.stopPropagation()}
             >
               {isFolder ? (
@@ -298,20 +343,109 @@ export function TreeNodeItem({
                   <button
                     onClick={() => {
                       setShowMenu(false);
+                      setShowColorSubmenu(false);
                       onCreateChildNote(node.id);
                     }}
                     className="w-full text-left px-3 py-1.5 hover:bg-[#E3DCD2] flex items-center gap-2 cursor-pointer text-[#3D352E]"
                   >
-                    <Plus className="w-3.5 h-3.5 text-[#8C7B6E]" /> Nova Nota
+                    <Plus className="w-3.5 h-3.5 text-[#8C7B6E]" /> Nova nota dentro da pasta
                   </button>
                   <button
                     onClick={() => {
                       setShowMenu(false);
+                      setShowColorSubmenu(false);
                       onCreateChildFolder(node.id);
                     }}
                     className="w-full text-left px-3 py-1.5 hover:bg-[#E3DCD2] flex items-center gap-2 cursor-pointer text-[#3D352E]"
                   >
-                    <FolderPlus className="w-3.5 h-3.5 text-[#8C7B6E]" /> Nova Subpasta
+                    <FolderPlus className="w-3.5 h-3.5 text-[#8C7B6E]" /> Nova subpasta
+                  </button>
+                  <button
+                    onClick={() => {
+                      setShowMenu(false);
+                      setShowColorSubmenu(false);
+                      setIsLocalEditing(true);
+                    }}
+                    className="w-full text-left px-3 py-1.5 hover:bg-[#E3DCD2] flex items-center gap-2 cursor-pointer text-[#3D352E]"
+                  >
+                    <Edit2 className="w-3.5 h-3.5 text-[#8C7B6E]" /> Renomear
+                  </button>
+
+                  {/* Alterar cor */}
+                  <button
+                    onClick={() => setShowColorSubmenu((prev) => !prev)}
+                    className="w-full text-left px-3 py-1.5 hover:bg-[#E3DCD2] flex items-center justify-between gap-2 cursor-pointer text-[#3D352E]"
+                  >
+                    <div className="flex items-center gap-2">
+                      <Palette className="w-3.5 h-3.5 text-[#8C7B6E]" />
+                      <span>Alterar cor</span>
+                    </div>
+                    {node.color && (
+                      <span
+                        className="w-2.5 h-2.5 rounded-full border border-black/10 shrink-0"
+                        style={{ backgroundColor: node.color }}
+                      />
+                    )}
+                  </button>
+
+                  {/* Submenu da paleta de cores */}
+                  {showColorSubmenu && (
+                    <div className="px-2.5 py-2 bg-[#F9F7F2] border-y border-[#E3DCD2] space-y-1.5 my-1">
+                      <div className="flex items-center justify-between text-[10px] font-semibold text-[#8C7B6E] uppercase px-0.5">
+                        <span>Paleta de Cores</span>
+                        {node.color && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (onSetNodeColor) onSetNodeColor(node.id, null);
+                              setShowMenu(false);
+                              setShowColorSubmenu(false);
+                            }}
+                            className="text-[#8C7B6E] hover:text-red-600 transition-colors font-normal lowercase cursor-pointer"
+                          >
+                            remover cor
+                          </button>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-5 gap-1.5 py-0.5">
+                        {FOLDER_PALETTE.map((pal) => {
+                          const isCurrent = (node.color || null) === pal.value;
+                          return (
+                            <button
+                              key={pal.id}
+                              type="button"
+                              title={pal.label}
+                              onClick={() => {
+                                if (onSetNodeColor) onSetNodeColor(node.id, pal.value);
+                                setShowMenu(false);
+                                setShowColorSubmenu(false);
+                              }}
+                              className={`w-6 h-6 rounded-md flex items-center justify-center border transition-all cursor-pointer ${
+                                isCurrent
+                                  ? 'ring-2 ring-[#3D352E] border-transparent scale-110 shadow-xs'
+                                  : 'border-[#E3DCD2] hover:scale-105'
+                              }`}
+                              style={{ backgroundColor: pal.hex }}
+                            >
+                              {isCurrent && <Check className="w-3 h-3 text-white stroke-[3]" />}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="h-px bg-[#E3DCD2] my-1" />
+
+                  <button
+                    onClick={() => {
+                      setShowMenu(false);
+                      setShowColorSubmenu(false);
+                      onDeleteNode(node.id);
+                    }}
+                    className="w-full text-left px-3 py-1.5 hover:bg-red-50 text-red-600 flex items-center gap-2 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Excluir
                   </button>
                 </>
               ) : (
@@ -323,7 +457,9 @@ export function TreeNodeItem({
                     }}
                     className="w-full text-left px-3 py-1.5 hover:bg-[#E3DCD2] flex items-center gap-2 cursor-pointer text-[#3D352E]"
                   >
-                    <Star className={`w-3.5 h-3.5 ${node.isFavorite ? 'fill-amber-500 text-amber-500' : 'text-[#8C7B6E]'}`} />
+                    <Star
+                      className={`w-3.5 h-3.5 ${node.isFavorite ? 'fill-amber-500 text-amber-500' : 'text-[#8C7B6E]'}`}
+                    />
                     <span>{node.isFavorite ? 'Remover dos favoritos' : 'Adicionar aos favoritos'}</span>
                   </button>
                   <button
@@ -344,36 +480,33 @@ export function TreeNodeItem({
                   >
                     <Download className="w-3.5 h-3.5 text-[#8C7B6E]" /> Exportar Markdown
                   </button>
+                  <button
+                    onClick={() => {
+                      setShowMenu(false);
+                      setIsLocalEditing(true);
+                    }}
+                    className="w-full text-left px-3 py-1.5 hover:bg-[#E3DCD2] flex items-center gap-2 cursor-pointer text-[#3D352E]"
+                  >
+                    <Edit2 className="w-3.5 h-3.5 text-[#8C7B6E]" /> Renomear
+                  </button>
+                  <div className="h-px bg-[#E3DCD2] my-1" />
+                  <button
+                    onClick={() => {
+                      setShowMenu(false);
+                      onDeleteNode(node.id);
+                    }}
+                    className="w-full text-left px-3 py-1.5 hover:bg-red-50 text-red-600 flex items-center gap-2 cursor-pointer"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" /> Excluir
+                  </button>
                 </>
               )}
-
-              <button
-                onClick={() => {
-                  setShowMenu(false);
-                  setIsLocalEditing(true);
-                }}
-                className="w-full text-left px-3 py-1.5 hover:bg-[#E3DCD2] flex items-center gap-2 cursor-pointer text-[#3D352E]"
-              >
-                <Edit2 className="w-3.5 h-3.5 text-[#8C7B6E]" /> Renomear
-              </button>
-
-              <div className="h-px bg-[#E3DCD2] my-1" />
-
-              <button
-                onClick={() => {
-                  setShowMenu(false);
-                  onDeleteNode(node.id);
-                }}
-                className="w-full text-left px-3 py-1.5 hover:bg-red-50 text-red-600 flex items-center gap-2 cursor-pointer"
-              >
-                <Trash2 className="w-3.5 h-3.5" /> Excluir
-              </button>
             </div>
           </>
         )}
       </div>
 
-      {/* Recursive Children for expanded folders */}
+      {/* Recursive Children for expanded folders - passing effectiveColor down for visual inheritance */}
       {isFolder && isExpanded && node.children && node.children.length > 0 && (
         <div className="flex flex-col">
           {node.children.map((child) => (
@@ -381,6 +514,7 @@ export function TreeNodeItem({
               key={child.id}
               node={child}
               level={level + 1}
+              parentColor={effectiveColor}
               activeNodeId={activeNodeId}
               expandedFolders={expandedFolders}
               editingNodeId={editingNodeId}
@@ -393,6 +527,7 @@ export function TreeNodeItem({
               onCreateChildFolder={onCreateChildFolder}
               onRenameNode={onRenameNode}
               onDeleteNode={onDeleteNode}
+              onSetNodeColor={onSetNodeColor}
               onDuplicateNote={onDuplicateNote}
               onToggleFavorite={onToggleFavorite}
               onExportNote={onExportNote}

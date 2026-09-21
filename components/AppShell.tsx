@@ -683,6 +683,23 @@ export function AppShell() {
     });
   };
 
+  // 7b. Set Node Color (para pastas e herança)
+  const handleSetNodeColor = (nodeId: string, color: string | null) => {
+    if (!currentUser) return;
+    const now = new Date().toISOString();
+
+    // Registra mutação local para que o Realtime ignore eco da alteração
+    realtimeService.registerLocalNodeUpdate(nodeId, now);
+
+    // 1. Atualização otimista imediata na árvore (0ms)
+    setTree((prevTree) => updateNodeInTree(prevTree, { id: nodeId, color, updatedAt: now }));
+
+    // 2. Persistência no IndexedDB e sincronização em background
+    nodeService.setNodeColor(nodeId, color).catch((err) => {
+      console.warn('Error setting node color:', err);
+    });
+  };
+
   // 8. Duplicate Note
   const handleDuplicateNote = async (nodeId: string) => {
     if (!currentUser) return;
@@ -918,6 +935,7 @@ export function AppShell() {
           onCreateNote={handleCreateNote}
           onRenameNode={handleRenameNode}
           onDeleteNode={handleDeleteNode}
+          onSetNodeColor={handleSetNodeColor}
           onDuplicateNote={handleDuplicateNote}
           onToggleFavorite={handleToggleFavorite}
           onExportNote={handleExportNote}
@@ -962,6 +980,7 @@ export function AppShell() {
           onCreateNote={handleCreateNote}
           onRenameNode={handleRenameNode}
           onDeleteNode={handleDeleteNode}
+          onSetNodeColor={handleSetNodeColor}
           onDuplicateNote={handleDuplicateNote}
           onToggleFavorite={handleToggleFavorite}
           onExportNote={handleExportNote}

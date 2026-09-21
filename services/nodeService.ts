@@ -189,6 +189,24 @@ export const nodeService = {
     });
   },
 
+  async setNodeColor(nodeId: string, color: string | null): Promise<void> {
+    const node = await indexedDbService.getNode(nodeId);
+    if (!node) return;
+    const now = new Date().toISOString();
+    node.color = color;
+    node.updatedAt = now;
+
+    // Registra mutação local para blindar contra eco remoto
+    realtimeService.registerLocalNodeUpdate(node.id, now);
+
+    await indexedDbService.saveNode(node);
+
+    // Enfileira na sync_queue em background
+    syncEngine.enqueueNode(node).catch((err) => {
+      console.warn('[nodeService] Falha ao enfileirar alteração de cor de nó:', err);
+    });
+  },
+
   async moveNode(nodeId: string, newParentId: string | null, newPosition?: number): Promise<boolean> {
     // 1. Previne ciclos: novo pai não pode ser o próprio nó nem nenhum descendente
     if (newParentId === nodeId) {

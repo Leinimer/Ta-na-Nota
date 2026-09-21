@@ -363,6 +363,7 @@ class RealtimeServiceClass {
         parentId: row.parent_id,
         type: row.type,
         name: row.name,
+        color: row.color ?? null,
         position: Number(row.position || 0),
         createdAt: row.created_at,
         updatedAt: remoteUpdatedAt,
@@ -385,6 +386,7 @@ class RealtimeServiceClass {
       parentId: row.parent_id,
       type: row.type,
       name: row.name,
+      color: row.color ?? null,
       position: Number(row.position || 0),
       createdAt: row.created_at,
       updatedAt: remoteUpdatedAt,
@@ -544,10 +546,33 @@ class RealtimeServiceClass {
     const row = payload.new || payload.old;
     if (!row || (row.user_id && row.user_id !== userId)) return;
 
+    const eventType = payload.eventType as RealtimeEventType;
+    const noteId = row.note_id;
+    const tagId = row.tag_id;
+
+    if (noteId && tagId) {
+      try {
+        const currentTagIds = await indexedDbService.getNoteTags(noteId);
+        if (eventType === 'INSERT') {
+          if (!currentTagIds.includes(tagId)) {
+            const updated = [...currentTagIds, tagId];
+            await indexedDbService.setNoteTags(userId, noteId, updated);
+          }
+        } else if (eventType === 'DELETE') {
+          if (currentTagIds.includes(tagId)) {
+            const updated = currentTagIds.filter((id) => id !== tagId);
+            await indexedDbService.setNoteTags(userId, noteId, updated);
+          }
+        }
+      } catch (err) {
+        console.warn('[RealtimeService] Erro ao sincronizar note_tag no IndexedDB:', err);
+      }
+    }
+
     this.notifyListeners({
       type: 'relation',
       table: 'note_tags',
-      eventType: payload.eventType as RealtimeEventType,
+      eventType,
       record: row,
     });
   }
