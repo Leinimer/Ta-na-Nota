@@ -20,18 +20,24 @@ import {
   Check,
 } from 'lucide-react';
 
-export const FOLDER_PALETTE = [
-  { id: 'default', label: 'Padrão (Tema)', value: null, hex: '#8C7B6E' },
-  { id: 'gray', label: 'Cinza suave', value: '#78716C', hex: '#78716C' },
-  { id: 'brown', label: 'Caramelo suave', value: '#A27B5C', hex: '#A27B5C' },
-  { id: 'orange', label: 'Laranja suave', value: '#EA580C', hex: '#EA580C' },
-  { id: 'yellow', label: 'Amarelo suave', value: '#D97706', hex: '#D97706' },
-  { id: 'green', label: 'Verde suave', value: '#16A34A', hex: '#16A34A' },
-  { id: 'blue', label: 'Azul suave', value: '#2563EB', hex: '#2563EB' },
-  { id: 'purple', label: 'Roxo suave', value: '#7C3AED', hex: '#7C3AED' },
-  { id: 'pink', label: 'Rosa suave', value: '#DB2777', hex: '#DB2777' },
-  { id: 'red', label: 'Vermelho suave', value: '#DC2626', hex: '#DC2626' },
+export const FOLDER_PASTEL_PALETTE = [
+  { id: 'red', label: 'Vermelho pastel', hex: '#FCA5A5' },
+  { id: 'orange', label: 'Laranja pastel', hex: '#FDBA74' },
+  { id: 'yellow', label: 'Amarelo pastel', hex: '#FDE047' },
+  { id: 'green', label: 'Verde pastel', hex: '#86EFAC' },
+  { id: 'cyan', label: 'Ciano pastel', hex: '#67E8F9' },
+  { id: 'blue', label: 'Azul pastel', hex: '#93C5FD' },
+  { id: 'purple', label: 'Roxo pastel', hex: '#C4B5FD' },
+  { id: 'lilac', label: 'Lilás pastel', hex: '#E9D5FF' },
+  { id: 'pink', label: 'Rosa pastel', hex: '#F9A8D4' },
+  { id: 'brown', label: 'Marrom pastel', hex: '#D7CCC8' },
+  { id: 'beige', label: 'Bege pastel', hex: '#E6D5B8' },
+  { id: 'gray', label: 'Cinza pastel', hex: '#D1D5DB' },
+  { id: 'soft-black', label: 'Preto suave', hex: '#4B5563' },
+  { id: 'off-white', label: 'Branco / Off-white', hex: '#F3F4F6' },
 ];
+
+export const FOLDER_PALETTE = FOLDER_PASTEL_PALETTE;
 
 interface TreeNodeItemProps {
   node: TreeNode;
@@ -240,17 +246,40 @@ export function TreeNodeItem({
         {/* Folder Icon with resolved effectiveColor or Note Icon */}
         <span className="shrink-0 flex items-center justify-center">
           {isFolder ? (
-            isExpanded ? (
-              <FolderOpen
-                className="w-4 h-4 transition-colors"
-                style={{ color: effectiveColor || '#8C7B6E' }}
-              />
-            ) : (
-              <Folder
-                className="w-4 h-4 transition-colors"
-                style={{ color: effectiveColor || '#8C7B6E' }}
-              />
-            )
+            (() => {
+              const isCustomColor = Boolean(effectiveColor);
+              const folderColor = effectiveColor || '#8C7B6E';
+              const lowerColor = effectiveColor?.toLowerCase();
+              const isVeryLight = Boolean(
+                lowerColor &&
+                  (lowerColor === '#f9f7f2' ||
+                    lowerColor === '#ffffff' ||
+                    lowerColor === '#f3f4f6')
+              );
+              const strokeColor = isVeryLight
+                ? '#8C7B6E'
+                : isCustomColor
+                ? folderColor
+                : 'currentColor';
+
+              return isExpanded ? (
+                <FolderOpen
+                  className="w-4 h-4 transition-colors"
+                  style={{
+                    color: strokeColor,
+                    fill: isCustomColor ? folderColor : 'transparent',
+                  }}
+                />
+              ) : (
+                <Folder
+                  className="w-4 h-4 transition-colors"
+                  style={{
+                    color: strokeColor,
+                    fill: isCustomColor ? folderColor : 'transparent',
+                  }}
+                />
+              );
+            })()
           ) : (
             <FileText className="w-4 h-4 text-[#8C7B6E]" />
           )}
@@ -279,15 +308,6 @@ export function TreeNodeItem({
           >
             {node.name || (isFolder ? 'Nova pasta' : 'Sem título')}
           </span>
-        )}
-
-        {/* Explicit Color Dot for folders that define their own color */}
-        {isFolder && node.color && (
-          <span
-            className="w-2 h-2 rounded-full border border-black/10 shrink-0"
-            style={{ backgroundColor: node.color }}
-            title={`Cor da pasta: ${node.color}`}
-          />
         )}
 
         {/* Favorite indicator for notes */}
@@ -382,7 +402,7 @@ export function TreeNodeItem({
                     </div>
                     {node.color && (
                       <span
-                        className="w-2.5 h-2.5 rounded-full border border-black/10 shrink-0"
+                        className="w-3 h-3 rounded border border-black/10 shrink-0"
                         style={{ backgroundColor: node.color }}
                       />
                     )}
@@ -390,9 +410,9 @@ export function TreeNodeItem({
 
                   {/* Submenu da paleta de cores */}
                   {showColorSubmenu && (
-                    <div className="px-2.5 py-2 bg-[#F9F7F2] border-y border-[#E3DCD2] space-y-1.5 my-1">
+                    <div className="px-2.5 py-2 bg-[#F9F7F2] border-y border-[#E3DCD2] space-y-2 my-1 max-w-[240px]">
                       <div className="flex items-center justify-between text-[10px] font-semibold text-[#8C7B6E] uppercase px-0.5">
-                        <span>Paleta de Cores</span>
+                        <span>Cores Pastéis</span>
                         {node.color && (
                           <button
                             type="button"
@@ -407,31 +427,49 @@ export function TreeNodeItem({
                           </button>
                         )}
                       </div>
-                      <div className="grid grid-cols-5 gap-1.5 py-0.5">
-                        {FOLDER_PALETTE.map((pal) => {
-                          const isCurrent = (node.color || null) === pal.value;
+                      <div className="grid grid-cols-7 gap-1 py-0.5">
+                        {FOLDER_PASTEL_PALETTE.map((pal) => {
+                          const isCurrent = (node.color || '').toLowerCase() === pal.hex.toLowerCase();
                           return (
                             <button
                               key={pal.id}
                               type="button"
                               title={pal.label}
                               onClick={() => {
-                                if (onSetNodeColor) onSetNodeColor(node.id, pal.value);
+                                if (onSetNodeColor) onSetNodeColor(node.id, pal.hex);
                                 setShowMenu(false);
                                 setShowColorSubmenu(false);
                               }}
-                              className={`w-6 h-6 rounded-md flex items-center justify-center border transition-all cursor-pointer ${
+                              className={`w-5 h-5 rounded-md flex items-center justify-center border transition-all cursor-pointer ${
                                 isCurrent
                                   ? 'ring-2 ring-[#3D352E] border-transparent scale-110 shadow-xs'
-                                  : 'border-[#E3DCD2] hover:scale-105'
+                                  : 'border-black/15 hover:scale-110'
                               }`}
                               style={{ backgroundColor: pal.hex }}
                             >
-                              {isCurrent && <Check className="w-3 h-3 text-white stroke-[3]" />}
+                              {isCurrent && <Check className="w-3 h-3 text-[#3D352E] stroke-[3]" />}
                             </button>
                           );
                         })}
                       </div>
+
+                      {/* Escolher outra cor (Color Picker HTML real <input type="color">) */}
+                      <label className="flex items-center gap-2 px-2 py-1.5 rounded-md text-xs cursor-pointer hover:bg-[#E3DCD2] text-[#3D352E] transition-colors border border-[#E3DCD2] bg-[#FEFDFA] shadow-2xs relative">
+                        <div
+                          className="w-4 h-4 rounded border border-black/15 shrink-0"
+                          style={{ backgroundColor: node.color || '#93C5FD' }}
+                        />
+                        <span className="flex-1 text-[11px] font-medium">Escolher outra cor...</span>
+                        <input
+                          type="color"
+                          value={node.color || '#93C5FD'}
+                          onChange={(e) => {
+                            const hex = e.target.value;
+                            if (onSetNodeColor) onSetNodeColor(node.id, hex);
+                          }}
+                          className="w-6 h-6 opacity-0 absolute right-2 cursor-pointer"
+                        />
+                      </label>
                     </div>
                   )}
 

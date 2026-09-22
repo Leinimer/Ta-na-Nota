@@ -354,6 +354,8 @@ class RealtimeServiceClass {
       }
     }
 
+    const resolvedColor = row.color !== undefined ? (row.color ?? null) : (localNode?.color ?? null);
+
     // 5. Se o evento remoto for soft-delete (row.deleted_at preenchido)
     if (row.deleted_at) {
       this.locallyDeletedNodeIds.add(nodeId);
@@ -363,7 +365,7 @@ class RealtimeServiceClass {
         parentId: row.parent_id,
         type: row.type,
         name: row.name,
-        color: row.color ?? null,
+        color: resolvedColor,
         position: Number(row.position || 0),
         createdAt: row.created_at,
         updatedAt: remoteUpdatedAt,
@@ -386,7 +388,7 @@ class RealtimeServiceClass {
       parentId: row.parent_id,
       type: row.type,
       name: row.name,
-      color: row.color ?? null,
+      color: resolvedColor,
       position: Number(row.position || 0),
       createdAt: row.created_at,
       updatedAt: remoteUpdatedAt,

@@ -1,6 +1,6 @@
 import { Details, DetailsContent, DetailsSummary } from '@tiptap/extension-details';
-import { findParentNode, findChildren, mergeAttributes } from '@tiptap/core';
-import { Selection, TextSelection } from '@tiptap/pm/state';
+import { findParentNode, mergeAttributes } from '@tiptap/core';
+import { Selection, NodeSelection } from '@tiptap/pm/state';
 
 export const CustomDetails = Details.extend({
   addAttributes() {
@@ -19,7 +19,7 @@ export const CustomDetails = Details.extend({
       setDetails:
         () =>
         ({ state, chain }) => {
-          const { schema, selection } = state;
+          const { selection } = state;
           const { $from, $to } = selection;
 
           const hasSelection = !selection.empty;
@@ -48,9 +48,6 @@ export const CustomDetails = Details.extend({
             ],
           };
 
-          // range.start é antes de details.
-          // range.start + 1 é antes de detailsSummary.
-          // range.start + 2 é dentro de detailsSummary.
           const cursorPositionInSummary = range.start + 2 + (selectedText ? selectedText.length : 0);
 
           return chain()
@@ -59,42 +56,22 @@ export const CustomDetails = Details.extend({
             .scrollIntoView()
             .run();
         },
+      // Exclui o bloco details por completo (details, summary, content e todos os filhos)
       unsetDetails:
         () =>
-        ({ state, chain }) => {
-          const { selection, schema } = state;
+        ({ state, chain }: any) => {
+          const { selection } = state;
           const details = findParentNode((node) => node.type === this.type)(selection);
           if (!details) return false;
-
-          const detailsSummaries = findChildren(
-            details.node,
-            (node) => node.type === schema.nodes.detailsSummary
-          );
-          const detailsContents = findChildren(
-            details.node,
-            (node) => node.type === schema.nodes.detailsContent
-          );
-          if (!detailsSummaries.length || !detailsContents.length) return false;
-
-          const detailsSummary = detailsSummaries[0];
-          const detailsContent = detailsContents[0];
-          const from = details.pos;
-          const range = {
-            from,
-            to: from + details.node.nodeSize,
-          };
-
-          const summaryText = detailsSummary.node.textContent;
-          const contentBlocks = detailsContent.node.content.toJSON() || [];
-
-          const summaryParagraph = {
-            type: 'paragraph',
-            content: summaryText ? [{ type: 'text', text: summaryText }] : [],
-          };
-
-          const merged = [summaryParagraph, ...contentBlocks];
-
-          return chain().insertContentAt(range, merged).setTextSelection(from + 1).run();
+          return chain().deleteRange({ from: details.pos, to: details.pos + details.node.nodeSize }).run();
+        },
+      deleteDetails:
+        () =>
+        ({ state, chain }: any) => {
+          const { selection } = state;
+          const details = findParentNode((node) => node.type === this.type)(selection);
+          if (!details) return false;
+          return chain().deleteRange({ from: details.pos, to: details.pos + details.node.nodeSize }).run();
         },
     };
   },
@@ -113,6 +90,66 @@ export const CustomDetails = Details.extend({
       } else {
         dom.classList.remove('is-open');
       }
+
+      // Handle de movimentação do Toggle estilo Notion [ ⋮⋮ ] à esquerda da seta
+      const dragHandle = document.createElement('div');
+      dragHandle.className = 'details-drag-handle';
+      dragHandle.setAttribute('draggable', 'true');
+      dragHandle.setAttribute('data-drag-handle', 'true');
+      dragHandle.setAttribute('title', 'Arrastar para mover bloco ou clicar para selecionar');
+      dragHandle.innerHTML = `<svg class="details-drag-icon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="8" cy="6" r="1.8"/><circle cx="8" cy="12" r="1.8"/><circle cx="8" cy="18" r="1.8"/><circle cx="16" cy="6" r="1.8"/><circle cx="16" cy="12" r="1.8"/><circle cx="16" cy="18" r="1.8"/></svg>`;
+
+      // Impede seleção acidental de texto e seleciona o nó details inteiro
+      dragHandle.addEventListener('mousedown', (e) => {
+        e.stopPropagation();
+        if (typeof getPos !== 'function') return;
+        const pos = getPos();
+        if (typeof pos !== 'number') return;
+        const selection = NodeSelection.create(editor.state.doc, pos);
+        editor.view.dispatch(editor.state.tr.setSelection(selection));
+      });
+
+      dragHandle.addEventListener('click', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        if (typeof getPos !== 'function') return;
+        const pos = getPos();
+        if (typeof pos !== 'number') return;
+        const selection = NodeSelection.create(editor.state.doc, pos);
+        editor.view.dispatch(editor.state.tr.setSelection(selection));
+        editor.view.focus();
+      });
+
+      dragHandle.addEventListener('dragstart', (e) => {
+        if (typeof getPos !== 'function') return;
+        const pos = getPos();
+        if (typeof pos !== 'number') return;
+
+        const node = editor.state.doc.nodeAt(pos);
+        if (!node) return;
+
+        // Seleciona o nó details inteiro como NodeSelection para o drag do ProseMirror
+        const selection = NodeSelection.create(editor.state.doc, pos);
+        editor.view.dispatch(editor.state.tr.setSelection(selection));
+
+        if (e.dataTransfer) {
+          const slice = selection.content();
+          e.dataTransfer.effectAllowed = 'move';
+          (editor.view as any).dragging = {
+            slice,
+            move: true,
+          };
+          e.dataTransfer.setData('text/plain', node.textContent);
+          e.dataTransfer.setData('text/html', dom.outerHTML);
+          try {
+            e.dataTransfer.setDragImage(dom, 20, 10);
+          } catch (_) {}
+        }
+      });
+
+      dragHandle.addEventListener('dragend', () => {
+        (editor.view as any).dragging = null;
+      });
 
       // Botão independente com ícone chevron do Notion
       const toggle = document.createElement('button');
@@ -163,6 +200,7 @@ export const CustomDetails = Details.extend({
         }
       });
 
+      dom.appendChild(dragHandle);
       dom.appendChild(toggle);
 
       const content = document.createElement('div');
@@ -176,7 +214,12 @@ export const CustomDetails = Details.extend({
           if (mutation.type === 'selection') return false;
           const target = mutation.target as Node;
           const isInsideWrapper = dom.contains(target);
-          return toggle.contains(target) || !isInsideWrapper || dom === target;
+          return (
+            toggle.contains(target) ||
+            dragHandle.contains(target) ||
+            !isInsideWrapper ||
+            dom === target
+          );
         },
         update: (updatedNode) => {
           if (updatedNode.type !== this.type) return false;
@@ -202,7 +245,6 @@ export const CustomDetails = Details.extend({
 
         // Se o cursor estiver no detailsSummary:
         if ($head.parent.type === schema.nodes.detailsSummary) {
-          // Localiza o bloco details ancestral
           let detailsDepth = -1;
           for (let d = $head.depth; d > 0; d--) {
             if ($head.node(d).type.name === this.name) {
@@ -216,16 +258,15 @@ export const CustomDetails = Details.extend({
           const detailsPos = $head.before(detailsDepth);
           const tr = state.tr;
 
-          // Se estiver fechado, abre o toggle
+          // Se estiver fechado, abre o toggle ao pressionar Enter
           if (!detailsNode.attrs.open) {
             tr.setNodeMarkup(detailsPos, undefined, { ...detailsNode.attrs, open: true });
           }
 
           const summaryNode = detailsNode.child(0);
           const contentNode = detailsNode.child(1);
-          const contentPos = detailsPos + 1 + summaryNode.nodeSize; // posição antes de detailsContent
+          const contentPos = detailsPos + 1 + summaryNode.nodeSize;
 
-          // Se detailsContent estiver vazio de filhos, insere um parágrafo
           if (contentNode.childCount === 0) {
             const p = schema.nodes.paragraph.createAndFill();
             if (p) {
@@ -233,8 +274,6 @@ export const CustomDetails = Details.extend({
             }
           }
 
-          // Posiciona cursor dentro do primeiro bloco de detailsContent
-          // contentPos + 1 (entra no detailsContent) + 1 (entra no primeiro parágrafo)
           const targetPos = contentPos + 2;
           const $target = tr.doc.resolve(targetPos);
           const newSelection = Selection.near($target, 1);
@@ -245,7 +284,7 @@ export const CustomDetails = Details.extend({
         }
 
         // Se o cursor estiver dentro de detailsContent em uma linha vazia no final:
-        // Pressionar Enter sai do details e cria um parágrafo fora!
+        // Pressionar Enter sai do details e cria um parágrafo fora
         if (empty) {
           let contentDepth = -1;
           for (let d = $head.depth; d > 0; d--) {
@@ -260,7 +299,6 @@ export const CustomDetails = Details.extend({
             const childIndex = $head.index(contentDepth);
             const currentChild = contentNode.child(childIndex);
 
-            // Se o parágrafo atual estiver completamente vazio e for o último bloco filho do content:
             if (
               currentChild.type === schema.nodes.paragraph &&
               currentChild.content.size === 0 &&
@@ -290,17 +328,91 @@ export const CustomDetails = Details.extend({
         return false;
       },
 
+      // Delete (Forward Delete)
+      Delete: ({ editor }) => {
+        const { state, view } = editor;
+        const { selection, schema } = state;
+
+        // Se o nó details estiver selecionado como NodeSelection, exclui o bloco INTEIRO
+        if (selection instanceof NodeSelection && selection.node.type.name === this.name) {
+          const tr = state.tr.delete(selection.from, selection.to);
+          if (tr.doc.content.size === 0) {
+            const p = schema.nodes.paragraph.createAndFill();
+            if (p) tr.insert(0, p);
+          }
+          view.dispatch(tr);
+          return true;
+        }
+
+        // Se o cursor estiver no summary e o summary estiver vazio
+        const { $from, empty } = selection;
+        if (empty && $from.parent.type === schema.nodes.detailsSummary && $from.parent.content.size === 0) {
+          let detailsDepth = -1;
+          for (let d = $from.depth; d > 0; d--) {
+            if ($from.node(d).type.name === this.name) {
+              detailsDepth = d;
+              break;
+            }
+          }
+          if (detailsDepth !== -1) {
+            const detailsNode = $from.node(detailsDepth);
+            const detailsPos = $from.before(detailsDepth);
+            const tr = state.tr.delete(detailsPos, detailsPos + detailsNode.nodeSize);
+            if (tr.doc.content.size === 0) {
+              const p = schema.nodes.paragraph.createAndFill();
+              if (p) tr.insert(0, p);
+            }
+            view.dispatch(tr);
+            return true;
+          }
+        }
+
+        return false;
+      },
+
       // 2. Backspace
       Backspace: ({ editor }) => {
         const { state, view } = editor;
         const { selection, schema } = state;
+
+        // Se o nó details estiver selecionado como NodeSelection, exclui o bloco INTEIRO
+        if (selection instanceof NodeSelection && selection.node.type.name === this.name) {
+          const tr = state.tr.delete(selection.from, selection.to);
+          if (tr.doc.content.size === 0) {
+            const p = schema.nodes.paragraph.createAndFill();
+            if (p) tr.insert(0, p);
+          }
+          view.dispatch(tr);
+          return true;
+        }
+
         const { $from, empty } = selection;
         if (!empty) return false;
 
         // Se estiver no início do summary e o summary estiver vazio:
+        // Exclui o bloco INTEIRO (details + detailsSummary + detailsContent e todos os filhos)
         if ($from.parent.type === schema.nodes.detailsSummary && $from.parentOffset === 0) {
           if ($from.parent.content.size === 0) {
-            return (editor.commands as any).unsetDetails();
+            let detailsDepth = -1;
+            for (let d = $from.depth; d > 0; d--) {
+              if ($from.node(d).type.name === this.name) {
+                detailsDepth = d;
+                break;
+              }
+            }
+            if (detailsDepth !== -1) {
+              const detailsNode = $from.node(detailsDepth);
+              const detailsPos = $from.before(detailsDepth);
+              const tr = state.tr.delete(detailsPos, detailsPos + detailsNode.nodeSize);
+              if (tr.doc.content.size === 0) {
+                const p = schema.nodes.paragraph.createAndFill();
+                if (p) tr.insert(0, p);
+              }
+              const newPos = Math.min(detailsPos, tr.doc.content.size);
+              tr.setSelection(Selection.near(tr.doc.resolve(newPos), -1));
+              view.dispatch(tr);
+              return true;
+            }
           }
           return false;
         }

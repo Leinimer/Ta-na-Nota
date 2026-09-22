@@ -93,6 +93,9 @@ class SyncEngineClass {
   private lastSyncedLinks = new Map<string, string>(); // canonicalSourceId -> sortedTargetIds
   private lastSyncedNodeTime = new Map<string, string>(); // nodeId -> updatedAt
 
+  // Capacidade do schema remoto: indica se a tabela 'nodes' possui a coluna 'color'
+  private hasNodeColorColumn: boolean | null = null;
+
   // Status e ouvintes
   private currentStatus: SyncStatus = 'saved';
   private statusListeners: Set<SyncStatusListener> = new Set();
@@ -641,17 +644,20 @@ class SyncEngineClass {
         console.warn('[SyncEngine] Falha não bloqueante na checagem de conflito do node:', conflictCheckErr);
       }
 
-      const payload = {
+      const payload: Record<string, any> = {
         id: canonicalId,
         user_id: authUserId,
         parent_id: canonicalParentId,
         type: effectiveNode.type,
         name: effectiveNode.name || (effectiveNode.type === 'folder' ? 'Nova pasta' : 'Sem título'),
-        color: effectiveNode.color ?? null,
         position: Number(effectiveNode.position || 1000),
         updated_at: localUpdatedAt,
         deleted_at: effectiveNode.deletedAt || null,
       };
+
+      if (this.hasNodeColorColumn !== false && effectiveNode.color !== undefined) {
+        payload.color = effectiveNode.color;
+      }
 
       let attempt = 0;
       while (attempt < maxRetries) {
@@ -662,6 +668,13 @@ class SyncEngineClass {
             .upsert(payload, { onConflict: 'id' })
             .select('id, updated_at, deleted_at')
             .single();
+
+          if (error && (error.code === '42703' || error.message?.includes('color'))) {
+            console.warn('[SyncEngine] Supabase nodes não suporta coluna color. Removendo do payload e retentando...');
+            this.hasNodeColorColumn = false;
+            delete payload.color;
+            continue;
+          }
 
           // Verificação estrita de resultado: erro nulo e confirmação de ID, updated_at e deleted_at (Problema 10)
           const isDeletedSuccess =
@@ -2599,7 +2612,7 @@ class SyncEngineClass {
       const [nodesRes, notesRes, tagsRes, noteTagsRes, linksRes, attachmentsRes] = await Promise.all([
         supabase
           .from('nodes')
-          .select('id, user_id, parent_id, type, name, color, position, created_at, updated_at, deleted_at')
+          .select('*')
           .eq('user_id', authUserId)
           .order('position', { ascending: true }),
         supabase
@@ -2691,9 +2704,14 @@ class SyncEngineClass {
 
       // 1. Hidrata IndexedDB com os nós remotos SOMENTE se a consulta de nodes foi bem-sucedida (Problema 6)
       if (nodesRemoteQuerySucceeded) {
+        if (remoteNodes.length > 0) {
+          this.hasNodeColorColumn = (remoteNodes[0] as any).color !== undefined;
+        }
         for (const d of remoteNodes) {
           const local = await indexedDbService.getNode(d.id);
           const remoteTime = new Date(d.updated_at || d.created_at || 0).getTime();
+
+          const resolvedColor = d.color !== undefined ? (d.color ?? null) : (local?.color ?? null);
 
           if (d.deleted_at) {
             if (local) {
@@ -2712,7 +2730,7 @@ class SyncEngineClass {
                 parentId: d.parent_id,
                 type: d.type,
                 name: d.name,
-                color: d.color ?? null,
+                color: resolvedColor,
                 position: Number(d.position),
                 createdAt: d.created_at,
                 updatedAt: d.updated_at || d.deleted_at,
@@ -2745,7 +2763,7 @@ class SyncEngineClass {
             parentId: d.parent_id,
             type: d.type,
             name: d.name,
-            color: d.color ?? null,
+            color: resolvedColor,
             position: Number(d.position),
             createdAt: d.created_at,
             updatedAt: d.updated_at,
