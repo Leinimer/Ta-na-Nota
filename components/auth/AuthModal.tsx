@@ -79,10 +79,12 @@ export function AuthModal({
     }
   };
 
-  const handleLogout = async () => {
-    await authService.signOut();
+  const handleLogout = () => {
     onUserChanged(null);
     onClose();
+    authService.signOut().catch((err) => {
+      console.warn('Erro ao deslogar do Supabase em background:', err);
+    });
   };
 
   const handleManualSync = async () => {

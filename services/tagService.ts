@@ -46,6 +46,51 @@ export const tagService = {
     return matchingNodes;
   },
 
+  async getNotesForMultipleTags(tagIds: string[], userId: string): Promise<TreeNode[]> {
+    if (!tagIds || tagIds.length === 0) return [];
+    const notes = await indexedDbService.getAllNotes(userId);
+    const nodes = await indexedDbService.getAllNodes(userId);
+    const nodeMap = new Map(nodes.map((n) => [n.id, n]));
+
+    const matchingNodeMap = new Map<string, TreeNode>();
+
+    // Obtém todas as tags para comparar nomes também caso existam no markdown
+    const allTags = await indexedDbService.getTags(userId);
+    const targetTagNames = new Set(
+      allTags
+        .filter((t) => tagIds.includes(t.id))
+        .map((t) => t.normalizedName.toLowerCase())
+    );
+
+    for (const note of notes) {
+      const noteTagIds = await indexedDbService.getNoteTags(note.id);
+      let matches = tagIds.some((tId) => noteTagIds.includes(tId));
+
+      // Fallback por tags extraídas do markdownContent
+      if (!matches && note.markdownContent && targetTagNames.size > 0) {
+        const rawContent = note.markdownContent;
+        const matchesHashtag = Array.from(targetTagNames).some((tagName) => {
+          const regex = new RegExp(`(^|\\s)#${tagName}\\b`, 'i');
+          return regex.test(rawContent);
+        });
+        if (matchesHashtag) matches = true;
+      }
+
+      if (matches) {
+        const node = nodeMap.get(note.nodeId);
+        if (node && !node.deletedAt) {
+          matchingNodeMap.set(node.id, {
+            ...node,
+            noteId: note.id,
+            isFavorite: note.isFavorite,
+          });
+        }
+      }
+    }
+
+    return Array.from(matchingNodeMap.values());
+  },
+
   async getTagsForNote(noteId: string, userId: string): Promise<TagRecord[]> {
     const noteTagIds = await indexedDbService.getNoteTags(noteId);
     if (!noteTagIds || noteTagIds.length === 0) return [];

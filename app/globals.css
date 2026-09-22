@@ -297,16 +297,21 @@
   pointer-events: none;
 }
 
-/* Pastel Highlight Mark: altera unicamente o fundo */
+/* Pastel Highlight Mark: altera unicamente o fundo sem alterar a geometria do texto */
 .ProseMirror mark {
-  border-radius: 0.2rem;
-  padding: 0.08em 0.2em;
+  padding: 0 !important;
+  margin: 0 !important;
+  border-radius: 0 !important;
   box-decoration-break: clone;
   -webkit-box-decoration-break: clone;
   color: inherit !important;
-  font-weight: inherit !important;
-  font-style: inherit !important;
-  text-decoration: inherit !important;
+  font: inherit !important;
+}
+
+/* Modo marca-texto contínuo: cursor de texto normal */
+.editor-highlight-mode .ProseMirror,
+.editor-highlight-mode .ProseMirror * {
+  cursor: text !important;
 }
 
 /* Details / Toggle List styling - Modelo Notion Autêntico */

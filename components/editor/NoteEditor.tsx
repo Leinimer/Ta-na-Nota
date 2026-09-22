@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { useEditor, EditorContent } from '@tiptap/react';
+import { useEditor, EditorContent, Editor } from '@tiptap/react';
 import { StarterKit } from '@tiptap/starter-kit';
 import { Underline } from '@tiptap/extension-underline';
 import { Link } from '@tiptap/extension-link';
@@ -17,6 +17,7 @@ import { ListKeymap } from './extensions/ListKeymap';
 import { TreeNode, NoteRecord, BacklinkItem, AttachmentRecord, SyncStatus } from '@/types';
 import { TextSelection } from '@tiptap/pm/state';
 import { EditorToolbar } from './EditorToolbar';
+import { FloatingFormattingBar } from './FloatingFormattingBar';
 import { MarkdownEditor } from './MarkdownEditor';
 import { SlashCommandMenu } from './SlashCommandMenu';
 import { MarkdownService } from '@/services/markdownService';
@@ -109,14 +110,42 @@ export function NoteEditor({
   // Slash Command state
   const [slashMenuOpen, setSlashMenuOpen] = useState(false);
   const [slashMenuPosition, setSlashMenuPosition] = useState({ top: 0, left: 0 });
+  const [slashQuery, setSlashQuery] = useState('');
+  const [slashStartPos, setSlashStartPos] = useState<number | undefined>(undefined);
+  const slashTriggerRef = useRef<{ active: boolean; position: number } | null>(null);
+
+  const handleCloseSlashMenu = useCallback(() => {
+    setSlashMenuOpen(false);
+    slashTriggerRef.current = null;
+    setSlashQuery('');
+    setSlashStartPos(undefined);
+  }, []);
 
   // Highlight Mode: when active, mouse text selection automatically highlights with active pastel color
   const [highlightModeColor, setHighlightModeColor] = useState<string | null>(null);
   const highlightColorRef = useRef<string | null>(null);
+  const lastHighlightedRangeRef = useRef<{ from: number; to: number; color: string } | null>(null);
+  const isApplyingHighlightRef = useRef(false);
+  const editorRef = useRef<Editor | null>(null);
 
   useEffect(() => {
     highlightColorRef.current = highlightModeColor;
+    if (!highlightModeColor) {
+      lastHighlightedRangeRef.current = null;
+    }
   }, [highlightModeColor]);
+
+  // Cancel continuous highlight mode on global Escape
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && highlightColorRef.current) {
+        setHighlightModeColor(null);
+        lastHighlightedRangeRef.current = null;
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, []);
 
   // Compute initial Tiptap JSON content ensuring DocumentTitle is at index 0 and schema is valid
   const getInitialContent = () => {
@@ -276,6 +305,65 @@ export function NoteEditor({
     [node.id, note.id, onSaveContent]
   );
 
+  // Aplica o marca-texto contínuo com verificação rigorosa para não reaplicar repetidamente
+  const applyContinuousHighlight = useCallback(() => {
+    const ed = editorRef.current;
+    const color = highlightColorRef.current;
+    if (!ed || !color || isApplyingHighlightRef.current) return;
+
+    const { state } = ed;
+    const { selection } = state;
+    if (!selection || selection.empty || !(selection instanceof TextSelection)) {
+      return;
+    }
+
+    const { from, to } = selection;
+    if (from >= to) return;
+
+    // Ignora seleções que contenham apenas espaços em branco
+    const text = state.doc.textBetween(from, to, ' ');
+    if (!text || !text.trim()) return;
+
+    // Se essa mesma seleção e cor já foi processada, ignora
+    const last = lastHighlightedRangeRef.current;
+    if (last && last.from === from && last.to === to && last.color === color) {
+      return;
+    }
+
+    // Verifica se todos os nós de texto na seleção já possuem a cor requerida
+    let allAlreadyHighlighted = true;
+    state.doc.nodesBetween(from, to, (node: any) => {
+      if (node.isText) {
+        const mark = node.marks.find((m: any) => m.type.name === 'highlight');
+        if (!mark || mark.attrs?.color !== color) {
+          allAlreadyHighlighted = false;
+          return false;
+        }
+      }
+    });
+
+    if (allAlreadyHighlighted) {
+      lastHighlightedRangeRef.current = { from, to, color };
+      return;
+    }
+
+    lastHighlightedRangeRef.current = { from, to, color };
+    isApplyingHighlightRef.current = true;
+
+    try {
+      // Aplica o highlight UMA ÚNICA VEZ e preserva a seleção ativa
+      ed.chain()
+        .setTextSelection({ from, to })
+        .setHighlight({ color })
+        .setTextSelection({ from, to })
+        .run();
+    } finally {
+      setTimeout(() => {
+        isApplyingHighlightRef.current = false;
+      }, 50);
+    }
+  }, []);
+
   // Tiptap Editor Initialization
   const editor = useEditor(
     {
@@ -373,25 +461,35 @@ export function NoteEditor({
           return false;
         },
         handleDOMEvents: {
-          mouseup: (view) => {
+          mouseup: () => {
             if (highlightColorRef.current) {
-              const { selection } = view.state;
-              if (!selection.empty) {
-                const colorToApply = highlightColorRef.current;
-                setTimeout(() => {
-                  if (editor && colorToApply) {
-                    editor.chain().setHighlight({ color: colorToApply }).run();
-                  }
-                }, 10);
-              }
+              setTimeout(() => {
+                applyContinuousHighlight();
+              }, 10);
+            }
+            return false;
+          },
+          keyup: (_view, event) => {
+            if (highlightColorRef.current && (event.key.startsWith('Arrow') || event.key === 'Shift')) {
+              setTimeout(() => {
+                applyContinuousHighlight();
+              }, 10);
             }
             return false;
           },
           keydown: (view, event) => {
-            if (event.key === 'Escape' && highlightColorRef.current) {
-              setHighlightModeColor(null);
-              return true;
+            if (event.key === 'Escape') {
+              if (highlightColorRef.current) {
+                setHighlightModeColor(null);
+                lastHighlightedRangeRef.current = null;
+                return true;
+              }
+              if (slashMenuOpen || slashTriggerRef.current?.active) {
+                handleCloseSlashMenu();
+                return true;
+              }
             }
+
             if (event.key === '/') {
               const { selection } = view.state;
               const coords = view.coordsAtPos(selection.from);
@@ -399,11 +497,56 @@ export function NoteEditor({
                 top: Math.min(window.innerHeight - 320, coords.bottom + 8),
                 left: Math.min(window.innerWidth - 300, coords.left),
               });
+              // Registra a posição exata do '/' que está abrindo o menu
+              slashTriggerRef.current = {
+                active: true,
+                position: selection.from,
+              };
+              setSlashStartPos(selection.from);
+              setSlashQuery('');
               setSlashMenuOpen(true);
+              return false;
             }
+
+            if (event.key === ' ' || event.code === 'Space') {
+              if (slashTriggerRef.current?.active) {
+                const { selection, doc } = view.state;
+                const slashPos = slashTriggerRef.current.position;
+                // Verifica se o cursor está imediatamente posterior ao '/' registrado
+                const isImmediatelyAfterSlash = selection.from === slashPos + 1;
+                const charBefore =
+                  slashPos >= 0 && selection.from <= doc.content.size
+                    ? doc.textBetween(slashPos, selection.from)
+                    : '';
+
+                if (isImmediatelyAfterSlash && charBefore === '/') {
+                  // 1. Fechar o SlashCommandMenu
+                  // 2. Limpar o estado/ref do slash
+                  handleCloseSlashMenu();
+                  // 3. NÃO apagar o '/'
+                  // 4. Permitir que o evento de espaço continue normalmente para o ProseMirror/Tiptap
+                  return false;
+                }
+              }
+            }
+
+            if (event.key === 'Backspace' && slashTriggerRef.current?.active) {
+              const { selection } = view.state;
+              if (selection.from <= slashTriggerRef.current.position + 1) {
+                handleCloseSlashMenu();
+              }
+            }
+
             return false;
           },
         },
+      },
+      onSelectionUpdate: ({ editor: ed }) => {
+        if (isApplyingHighlightRef.current) return;
+        const { selection } = ed.state;
+        if (!selection || selection.empty) {
+          lastHighlightedRangeRef.current = null;
+        }
       },
       onUpdate: ({ editor: ed }) => {
         localEditRevisionRef.current += 1;
@@ -414,6 +557,22 @@ export function NoteEditor({
           noteId: node.id,
           revision: localEditRevisionRef.current,
         });
+
+        // Atualiza a query do slash command se o menu estiver ativo
+        if (slashTriggerRef.current?.active) {
+          const { selection, doc } = ed.state;
+          const slashPos = slashTriggerRef.current.position;
+          if (selection.from > slashPos && slashPos < doc.content.size) {
+            const textSinceSlash = doc.textBetween(slashPos, selection.from);
+            if (textSinceSlash.startsWith('/')) {
+              setSlashQuery(textSinceSlash.slice(1));
+            } else {
+              handleCloseSlashMenu();
+            }
+          } else {
+            handleCloseSlashMenu();
+          }
+        }
 
         setMarkdownContent(md);
         setTags(MarkdownService.extractTags(md));
@@ -447,6 +606,10 @@ export function NoteEditor({
     },
     [note.id]
   );
+
+  useEffect(() => {
+    editorRef.current = editor;
+  }, [editor]);
 
   // Sincroniza alteração EXTERNA de nome (ex: renomeação explícita pela sidebar)
   // Diretamente no primeiro bloco documentTitle do Tiptap via transação atômica
@@ -679,7 +842,9 @@ export function NoteEditor({
           {/* Paper Sheet Container (Página da Nota) */}
           <div
             id="tiptap-editor-wrapper"
-            className="w-full max-w-[850px] min-h-[650px] bg-[#FFFFFF] border border-[#E3DCD2] rounded-xl shadow-xs p-6 sm:p-12 relative flex flex-col"
+            className={`w-full max-w-[850px] min-h-[650px] bg-[#FFFFFF] border border-[#E3DCD2] rounded-xl shadow-xs p-6 sm:p-12 relative flex flex-col ${
+              highlightModeColor ? 'editor-highlight-mode' : ''
+            }`}
           >
             <DocumentTitleContext.Provider
               value={useMemo(
@@ -695,6 +860,12 @@ export function NoteEditor({
                 <EditorContent editor={editor} />
               </div>
             </DocumentTitleContext.Provider>
+
+            {/* Barra Flutuante de Formatação (Negrito, Itálico, Sublinhado, Marca-texto pontual) */}
+            <FloatingFormattingBar
+              editor={editor}
+              isContinuousHighlightActive={Boolean(highlightModeColor)}
+            />
 
             {/* Ações contextuais de tabela flutuantes (Adicionar linha abaixo, adicionar coluna ao lado, selecionar, excluir) */}
             {editor?.isActive('table') && (
@@ -741,8 +912,10 @@ export function NoteEditor({
             <SlashCommandMenu
               editor={editor}
               isOpen={slashMenuOpen}
-              onClose={() => setSlashMenuOpen(false)}
+              onClose={handleCloseSlashMenu}
               position={slashMenuPosition}
+              externalQuery={slashQuery}
+              slashStartPos={slashStartPos}
               onTriggerImageUpload={() => noteImageInputRef.current?.click()}
             />
           </div>

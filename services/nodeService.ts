@@ -4,6 +4,7 @@ import { MarkdownService } from './markdownService';
 import { syncEngine, toCanonicalUuid } from './syncEngine';
 import { realtimeService } from './realtimeService';
 import { attachmentService } from './attachmentService';
+import { treeReorderService } from './treeReorderService';
 
 export const nodeService = {
   /**
@@ -174,8 +175,11 @@ export const nodeService = {
   async renameNode(nodeId: string, newName: string): Promise<void> {
     const node = await indexedDbService.getNode(nodeId);
     if (!node) return;
+    const cleanName = newName.trim();
+    if (!cleanName) return; // Não permite renomear para nome vazio
+
     const now = new Date().toISOString();
-    node.name = newName.trim();
+    node.name = cleanName;
     node.updatedAt = now;
 
     // Registra mutação local para blindar contra eco remoto
@@ -192,8 +196,12 @@ export const nodeService = {
   async setNodeColor(nodeId: string, color: string | null): Promise<void> {
     const node = await indexedDbService.getNode(nodeId);
     if (!node) return;
+    let validatedColor: string | null = null;
+    if (color && /^#[0-9A-Fa-f]{6}$/.test(color.trim())) {
+      validatedColor = color.trim().toLowerCase();
+    }
     const now = new Date().toISOString();
-    node.color = color;
+    node.color = validatedColor;
     node.updatedAt = now;
 
     // Registra mutação local para blindar contra eco remoto
@@ -231,7 +239,7 @@ export const nodeService = {
     // 2. Atualizar no IndexedDB localmente
     node.parentId = newParentId;
     if (typeof newPosition === 'number') {
-      node.position = newPosition;
+      node.position = Math.max(0, newPosition);
     }
     node.updatedAt = now;
 
@@ -257,6 +265,10 @@ export const nodeService = {
 
     // 4. Retorna resultado local imediatamente
     return true;
+  },
+
+  async reorderNodes(userId: string, updatedNodes: TreeNode[]): Promise<boolean> {
+    return treeReorderService.persistReorderBatch(userId, updatedNodes);
   },
 
   async deleteNode(nodeId: string): Promise<void> {

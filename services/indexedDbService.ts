@@ -120,9 +120,12 @@ export const indexedDbService = {
     const db = await getDB();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('nodes', 'readonly');
-      const req = tx.objectStore('nodes').getAll();
+      const store = tx.objectStore('nodes');
+      const req = store.indexNames.contains('userId')
+        ? store.index('userId').getAll(userId)
+        : store.getAll();
       req.onsuccess = () => {
-        const list: TreeNode[] = req.result.filter((n: TreeNode) => n.userId === userId && !n.deletedAt);
+        const list: TreeNode[] = (req.result || []).filter((n: TreeNode) => n.userId === userId && !n.deletedAt);
         resolve(list.sort((a, b) => a.position - b.position));
       };
       req.onerror = () => reject(req.error);
@@ -133,9 +136,12 @@ export const indexedDbService = {
     const db = await getDB();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('nodes', 'readonly');
-      const req = tx.objectStore('nodes').getAll();
+      const store = tx.objectStore('nodes');
+      const req = store.indexNames.contains('userId')
+        ? store.index('userId').getAll(userId)
+        : store.getAll();
       req.onsuccess = () => {
-        const list: TreeNode[] = req.result.filter((n: TreeNode) => n.userId === userId);
+        const list: TreeNode[] = (req.result || []).filter((n: TreeNode) => n.userId === userId);
         resolve(list.sort((a, b) => a.position - b.position));
       };
       req.onerror = () => reject(req.error);
@@ -146,9 +152,12 @@ export const indexedDbService = {
     const db = await getDB();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('nodes', 'readonly');
-      const req = tx.objectStore('nodes').getAll();
+      const store = tx.objectStore('nodes');
+      const req = store.indexNames.contains('userId')
+        ? store.index('userId').getAll(userId)
+        : store.getAll();
       req.onsuccess = () => {
-        const ids: string[] = req.result
+        const ids: string[] = (req.result || [])
           .filter((n: TreeNode) => n.userId === userId && Boolean(n.deletedAt))
           .map((n: TreeNode) => n.id);
         resolve(ids);
@@ -235,9 +244,12 @@ export const indexedDbService = {
     const db = await getDB();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('notes', 'readonly');
-      const req = tx.objectStore('notes').getAll();
+      const store = tx.objectStore('notes');
+      const req = store.indexNames.contains('userId')
+        ? store.index('userId').getAll(userId)
+        : store.getAll();
       req.onsuccess = () => {
-        const list = req.result.filter((n: NoteRecord) => n.userId === userId);
+        const list = (req.result || []).filter((n: NoteRecord) => n.userId === userId);
         resolve(list);
       };
       req.onerror = () => reject(req.error);
@@ -280,9 +292,12 @@ export const indexedDbService = {
     const db = await getDB();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('tags', 'readonly');
-      const req = tx.objectStore('tags').getAll();
+      const store = tx.objectStore('tags');
+      const req = store.indexNames.contains('userId')
+        ? store.index('userId').getAll(userId)
+        : store.getAll();
       req.onsuccess = () => {
-        const list = req.result.filter((t: TagRecord) => t.userId === userId);
+        const list = (req.result || []).filter((t: TagRecord) => t.userId === userId);
         resolve(list);
       };
       req.onerror = () => reject(req.error);
@@ -459,7 +474,10 @@ export const indexedDbService = {
     const db = await getDB();
     return new Promise((resolve, reject) => {
       const tx = db.transaction('attachments', 'readonly');
-      const req = tx.objectStore('attachments').getAll();
+      const store = tx.objectStore('attachments');
+      const req = store.indexNames.contains('userId')
+        ? store.index('userId').getAll(userId)
+        : store.getAll();
       req.onsuccess = () => {
         const list = (req.result || []).filter(
           (a: AttachmentRecord) =>
@@ -570,7 +588,9 @@ export const indexedDbService = {
     return new Promise((resolve, reject) => {
       const tx = db.transaction('sync_queue', 'readonly');
       const store = tx.objectStore('sync_queue');
-      const req = store.openCursor();
+      const req = store.indexNames.contains('userId')
+        ? store.index('userId').openCursor(IDBKeyRange.only(userId))
+        : store.openCursor();
       const results: SyncQueueItem[] = [];
       const now = Date.now();
 

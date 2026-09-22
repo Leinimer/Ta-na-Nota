@@ -18,6 +18,7 @@ import {
   FolderPlus,
   Palette,
   Check,
+  GripVertical,
 } from 'lucide-react';
 
 export const FOLDER_PASTEL_PALETTE = [
@@ -39,6 +40,8 @@ export const FOLDER_PASTEL_PALETTE = [
 
 export const FOLDER_PALETTE = FOLDER_PASTEL_PALETTE;
 
+export type DropPlacement = 'before' | 'inside' | 'after';
+
 interface TreeNodeItemProps {
   node: TreeNode;
   level?: number;
@@ -59,8 +62,9 @@ interface TreeNodeItemProps {
   onDuplicateNote: (nodeId: string) => void;
   onToggleFavorite: (nodeId: string) => void;
   onExportNote: (nodeId: string) => void;
-  onMoveNode: (draggedId: string, targetParentId: string | null) => void;
+  onMoveNode?: (draggedId: string, targetParentId: string | null) => void;
   onMoveMultipleNodes?: (draggedIds: string[], targetParentId: string | null) => void;
+  onReorderNodes?: (draggedIds: string[], targetNodeId: string | null, placement: DropPlacement) => void;
 }
 
 export function TreeNodeItem({
@@ -85,13 +89,14 @@ export function TreeNodeItem({
   onExportNote,
   onMoveNode,
   onMoveMultipleNodes,
+  onReorderNodes,
 }: TreeNodeItemProps) {
   const [isLocalEditing, setIsLocalEditing] = useState(false);
   const isEditing = isLocalEditing || editingNodeId === node.id;
   const [editName, setEditName] = useState(node.name);
   const [showMenu, setShowMenu] = useState(false);
   const [showColorSubmenu, setShowColorSubmenu] = useState(false);
-  const [isDragOver, setIsDragOver] = useState(false);
+  const [currentPlacement, setCurrentPlacement] = useState<DropPlacement | null>(null);
 
   // Resolução hierárquica visual: se o nó tem cor própria, prevalece; senão, herda do pai
   const effectiveColor = node.color || parentColor || null;
@@ -132,63 +137,87 @@ export function TreeNodeItem({
   // Drag and drop handlers
   const handleDragStart = (e: React.DragEvent) => {
     e.stopPropagation();
-    // Se o nó arrastado fizer parte dos selecionados (e houver mais de um selecionado), move o grupo!
-    if (selectedNodeIds && selectedNodeIds.has(node.id) && selectedNodeIds.size > 1) {
-      const idsArray = Array.from(selectedNodeIds);
-      e.dataTransfer.setData('application/json', JSON.stringify({ ids: idsArray }));
-      e.dataTransfer.setData('text/plain', node.id);
-    } else {
-      e.dataTransfer.setData('text/plain', node.id);
+    // Se o nó arrastado fizer parte dos selecionados (ou se há múltiplos selecionados), move todos os selecionados juntos
+    let idsToMove = [node.id];
+    if (selectedNodeIds && selectedNodeIds.has(node.id)) {
+      idsToMove = Array.from(selectedNodeIds);
     }
+    e.dataTransfer.setData('application/json', JSON.stringify({ ids: idsToMove }));
+    e.dataTransfer.setData('text/plain', node.id);
     e.dataTransfer.effectAllowed = 'move';
   };
 
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    if (!isDragOver) setIsDragOver(true);
+    e.dataTransfer.dropEffect = 'move';
+
+    const rect = e.currentTarget.getBoundingClientRect();
+    const relY = e.clientY - rect.top;
+    const height = rect.height;
+
+    let placement: DropPlacement;
+    if (isFolder) {
+      if (relY < height * 0.28) {
+        placement = 'before';
+      } else if (relY > height * 0.72) {
+        placement = 'after';
+      } else {
+        placement = 'inside';
+      }
+    } else {
+      placement = relY < height * 0.5 ? 'before' : 'after';
+    }
+
+    if (placement !== currentPlacement) {
+      setCurrentPlacement(placement);
+    }
   };
 
   const handleDragLeave = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDragOver(false);
+    const related = e.relatedTarget as HTMLElement | null;
+    if (related && e.currentTarget.contains(related)) {
+      return;
+    }
+    setCurrentPlacement(null);
   };
 
   const handleDrop = (e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDragOver(false);
+    const placement = currentPlacement;
+    setCurrentPlacement(null);
 
-    let multipleIds: string[] | null = null;
+    let ids: string[] = [];
     try {
-      const jsonData = e.dataTransfer.getData('application/json');
-      if (jsonData) {
-        const parsed = JSON.parse(jsonData);
-        if (Array.isArray(parsed.ids)) {
-          multipleIds = parsed.ids;
+      const raw = e.dataTransfer.getData('application/json');
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed.ids) && parsed.ids.length > 0) {
+          ids = parsed.ids;
         }
       }
     } catch {
-      multipleIds = null;
+      ids = [];
     }
 
-    const targetParentId = isFolder ? node.id : node.parentId;
+    if (ids.length === 0) {
+      const singleId = e.dataTransfer.getData('text/plain');
+      if (singleId) ids = [singleId];
+    }
 
-    if (multipleIds && multipleIds.length > 0) {
-      if (onMoveMultipleNodes) {
-        onMoveMultipleNodes(multipleIds, targetParentId);
-      } else {
-        multipleIds.forEach((id) => {
-          if (id !== node.id) {
-            onMoveNode(id, targetParentId);
-          }
-        });
-      }
-    } else {
-      const draggedId = e.dataTransfer.getData('text/plain');
-      if (draggedId && draggedId !== node.id) {
-        onMoveNode(draggedId, targetParentId);
+    if (ids.length > 0 && placement) {
+      if (onReorderNodes) {
+        onReorderNodes(ids, node.id, placement);
+      } else if (onMoveNode) {
+        const targetParentId = placement === 'inside' ? node.id : node.parentId;
+        if (onMoveMultipleNodes && ids.length > 1) {
+          onMoveMultipleNodes(ids, targetParentId);
+        } else {
+          ids.forEach((id) => onMoveNode!(id, targetParentId));
+        }
       }
     }
   };
@@ -214,9 +243,9 @@ export function TreeNodeItem({
             }
           }
         }}
-        style={{ paddingLeft: `${Math.max(8, level * 18 + 8)}px` }}
+        style={{ paddingLeft: `${Math.max(6, level * 18 + 6)}px` }}
         className={`
-          flex items-center gap-1.5 py-1.5 pr-2 rounded-md text-sm transition-all cursor-pointer relative
+          flex items-center gap-1 py-1.5 pr-2 rounded-md text-sm transition-all cursor-pointer relative
           ${
             isActive
               ? 'bg-[#D9C5B2] font-medium text-[#3D352E] border-l-2 border-[#8C7B6E]'
@@ -224,9 +253,50 @@ export function TreeNodeItem({
               ? 'bg-[#D9C5B2]/70 font-medium text-[#3D352E] ring-1 ring-[#8C7B6E]/60'
               : 'text-[#3D352E] hover:bg-[#E3DCD2]'
           }
-          ${isDragOver ? 'ring-2 ring-[#8C7B6E] bg-[#D9C5B2]/60' : ''}
         `}
       >
+        {/* Indicador de Drop: ANTES (linha sutil superior com bullet na guia) */}
+        {currentPlacement === 'before' && (
+          <div
+            className="absolute -top-[1.5px] left-0 right-0 h-[2.5px] bg-[#8C7B6E] z-30 pointer-events-none rounded-full flex items-center shadow-xs animate-in fade-in duration-75"
+            style={{ left: `${Math.max(4, level * 18 + 4)}px` }}
+          >
+            <div className="w-2 h-2 -ml-1 rounded-full bg-[#8C7B6E] ring-2 ring-[#F9F7F2] shrink-0" />
+          </div>
+        )}
+
+        {/* Indicador de Drop: DEPOIS (linha sutil inferior com bullet na guia) */}
+        {currentPlacement === 'after' && (
+          <div
+            className="absolute -bottom-[1.5px] left-0 right-0 h-[2.5px] bg-[#8C7B6E] z-30 pointer-events-none rounded-full flex items-center shadow-xs animate-in fade-in duration-75"
+            style={{ left: `${Math.max(4, level * 18 + 4)}px` }}
+          >
+            <div className="w-2 h-2 -ml-1 rounded-full bg-[#8C7B6E] ring-2 ring-[#F9F7F2] shrink-0" />
+          </div>
+        )}
+
+        {/* Indicador de Drop: DENTRO (somente pastas com badge de indicação) */}
+        {currentPlacement === 'inside' && isFolder && (
+          <div className="absolute inset-0 bg-[#D9C5B2]/40 rounded-md ring-2 ring-[#8C7B6E] ring-inset z-20 pointer-events-none flex items-center justify-end pr-2 animate-in fade-in duration-75">
+            <span className="text-[10px] font-semibold text-[#5C5046] bg-[#FEFDFA] border border-[#D9C5B2] px-1.5 py-0.5 rounded shadow-2xs">
+              ↳ Inserir dentro
+            </span>
+          </div>
+        )}
+
+        {/* Drag Handle: GripVertical ⋮⋮ */}
+        <span
+          draggable={!isEditing}
+          onDragStart={handleDragStart}
+          className="w-3.5 h-4 flex items-center justify-center opacity-0 group-hover/item:opacity-60 hover:!opacity-100 transition-opacity cursor-grab active:cursor-grabbing text-[#8C7B6E] shrink-0 touch-none select-none -ml-0.5"
+          title="Arrastar para mover"
+          onClick={(e) => {
+            e.stopPropagation();
+          }}
+        >
+          <GripVertical className="w-3.5 h-3.5" />
+        </span>
+
         {/* Expansion arrow for folders or spacer for notes */}
         {isFolder ? (
           <button
@@ -571,6 +641,7 @@ export function TreeNodeItem({
               onExportNote={onExportNote}
               onMoveNode={onMoveNode}
               onMoveMultipleNodes={onMoveMultipleNodes}
+              onReorderNodes={onReorderNodes}
             />
           ))}
         </div>

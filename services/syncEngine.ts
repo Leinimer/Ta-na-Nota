@@ -104,6 +104,7 @@ class SyncEngineClass {
   private isOnline = typeof navigator !== 'undefined' ? navigator.onLine : true;
   private isProcessingQueue = false;
   private queueDebounceTimer: NodeJS.Timeout | null = null;
+  private ongoingHydration: Promise<boolean> | null = null;
 
   /**
    * Lida com desconexão de rede ou Supabase inacessível de forma resiliente.
@@ -566,6 +567,18 @@ class SyncEngineClass {
       const canonicalId = toCanonicalUuid(effectiveNode.id);
       const canonicalParentId = effectiveNode.parentId ? toCanonicalUuid(effectiveNode.parentId) : null;
       const localTime = new Date(localUpdatedAt).getTime();
+
+      // Garante que o nó pai (pasta) esteja sincronizado no remoto antes do filho (atende à FK composta)
+      if (effectiveNode.parentId && !this.lastSyncedNodeTime.has(effectiveNode.parentId)) {
+        try {
+          const localParent = await indexedDbService.getNode(effectiveNode.parentId);
+          if (localParent && !localParent.deletedAt) {
+            await this.syncNode(localParent);
+          }
+        } catch (parentSyncErr) {
+          console.warn('[SyncEngine] Aviso ao sincronizar pasta pai antes do filho:', parentSyncErr);
+        }
+      }
 
       // 1. Verificação prévia de conflito comparando timestamps com o nó remoto existente
       try {
@@ -2591,8 +2604,19 @@ class SyncEngineClass {
    * Hidratação inicial do IndexedDB a partir do Supabase ao iniciar sessão.
    * Respeita LWW com comparação estrita de timestamps, preserva tombstones,
    * trata erros por tabela individualmente e recupera notas órfãs.
+   * Deduplica execuções simultâneas para evitar requisições redundantes.
    */
   async hydrateFromRemote(userId: string): Promise<boolean> {
+    if (this.ongoingHydration) {
+      return this.ongoingHydration;
+    }
+    this.ongoingHydration = this._executeHydrateFromRemote(userId).finally(() => {
+      this.ongoingHydration = null;
+    });
+    return this.ongoingHydration;
+  }
+
+  private async _executeHydrateFromRemote(userId: string): Promise<boolean> {
     const supabase = getSupabase();
     if (!supabase || !isSupabaseConfigured || !this.isOnline) return false;
 

@@ -10,6 +10,7 @@ import { exportService } from '@/services/exportService';
 import { syncEngine } from '@/services/syncEngine';
 import { realtimeService } from '@/services/realtimeService';
 import { indexedDbService } from '@/services/indexedDbService';
+import { treeReorderService, DropPlacement } from '@/services/treeReorderService';
 import { Sidebar } from './sidebar/Sidebar';
 import { NoteEditor } from './editor/NoteEditor';
 import { EditorErrorBoundary } from './editor/EditorErrorBoundary';
@@ -26,6 +27,7 @@ import {
   Search,
   X,
   FileText,
+  PanelLeftOpen,
 } from 'lucide-react';
 
 // Helper para atualizar propriedades de um nó na árvore
@@ -239,8 +241,13 @@ export function AppShell() {
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(280);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isDraggingSidebar, setIsDraggingSidebar] = useState(false);
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);
+
+  // Geração e ID ativo para evitar race conditions após logout ou troca de sessão
+  const authGenerationRef = useRef(0);
+  const activeUserIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -372,36 +379,100 @@ export function AppShell() {
     }
   }, [activeNode, selectNode, selectNodeById]);
 
+  const handleLogout = useCallback(() => {
+    // 1. Incrementa token de geração para descartar callbacks assíncronos pendentes
+    authGenerationRef.current += 1;
+    activeUserIdRef.current = null;
+
+    // 2. Interrompe Realtime e syncEngine de imediato
+    syncEngine.setAuthenticatedUserId(null);
+    realtimeService.unsubscribe();
+
+    // 3. Limpa imediatamente todo o estado visual do aplicativo (0ms de latência)
+    setCurrentUser(null);
+    setActiveNode(null);
+    setActiveNote(null);
+    setTree([]);
+    setTags([]);
+    setIsAuthModalOpen(false);
+
+    // 4. Operações secundárias em background sem travar o aplicativo
+    authService.signOut().catch((err) => {
+      console.warn('[Auth] Erro ao deslogar em background:', err);
+    });
+  }, []);
+
+  const handleUserSession = useCallback(
+    async (user: AppUser) => {
+      authGenerationRef.current += 1;
+      const currentGen = authGenerationRef.current;
+      activeUserIdRef.current = user.id;
+
+      // 1. Entrar na aplicação e definir usuário imediatamente (0ms)
+      syncEngine.setAuthenticatedUserId(user.id);
+      setCurrentUser(user);
+      setIsCheckingAuth(false);
+
+      // 2. Mostrar dados locais do IndexedDB imediatamente se existirem
+      try {
+        await refreshAppData(user.id);
+      } catch (err) {
+        console.warn('Erro ao carregar dados locais do IndexedDB:', err);
+      }
+
+      // Verificação de geração para proteção estrita contra corrida de estado após logout/troca
+      if (authGenerationRef.current !== currentGen || activeUserIdRef.current !== user.id) {
+        return;
+      }
+
+      // 3. Operações secundárias em background (não bloqueiam a interface nem o editor)
+      indexedDbService.migrateLegacyIds(user.id).catch(() => {});
+      indexedDbService
+        .getTombstoneNodeIds(user.id)
+        .then((tombstones) => {
+          if (authGenerationRef.current === currentGen) {
+            realtimeService.loadTombstoneIds(tombstones);
+          }
+        })
+        .catch(() => {});
+
+      // Inicia Realtime sem bloquear a renderização
+      realtimeService.subscribe(user.id).catch(() => {});
+
+      // Hidratação remota em background se online
+      if (typeof navigator !== 'undefined' && navigator.onLine) {
+        syncEngine
+          .hydrateFromRemote(user.id)
+          .then(async (changed) => {
+            if (authGenerationRef.current !== currentGen || activeUserIdRef.current !== user.id) {
+              return;
+            }
+            if (changed) {
+              await refreshAppData(user.id);
+            }
+            syncEngine.triggerQueueProcessing(100);
+          })
+          .catch((err) => {
+            console.warn('[SyncEngine] Falha ao hidratar do remoto em background:', err);
+          });
+      }
+    },
+    [refreshAppData]
+  );
+
   useEffect(() => {
+    let isCancelled = false;
+
     async function initUser() {
-      // Diagnóstico de inicialização da configuração do Supabase sem bloquear UI
+      // Diagnóstico em background
       syncEngine.runStartupDiagnostic().catch(() => {});
 
       try {
         const user = await authService.getCurrentUser();
+        if (isCancelled) return;
+
         if (user) {
-          syncEngine.setAuthenticatedUserId(user.id);
-          setCurrentUser(user);
-          await indexedDbService.migrateLegacyIds(user.id);
-          const tombstoneIds = await indexedDbService.getTombstoneNodeIds(user.id);
-          realtimeService.loadTombstoneIds(tombstoneIds);
-
-          // 1. CARREGAMENTO OFFLINE-FIRST: renderiza árvore e notas locais do IndexedDB imediatamente
-          await refreshAppData(user.id);
-          setIsCheckingAuth(false);
-
-          // 2. Somente depois hidrata e processa fila com o Supabase se houver conexão
-          if (typeof navigator !== 'undefined' && navigator.onLine) {
-            syncEngine
-              .hydrateFromRemote(user.id)
-              .then(async () => {
-                await refreshAppData(user.id);
-                syncEngine.triggerQueueProcessing(100);
-              })
-              .catch((err) => {
-                console.warn('[SyncEngine] Falha ao hidratar do remoto em background:', err);
-              });
-          }
+          handleUserSession(user);
         } else {
           syncEngine.setAuthenticatedUserId(null);
           setCurrentUser(null);
@@ -409,30 +480,45 @@ export function AppShell() {
         }
       } catch (err) {
         console.warn('Erro ao inicializar sessão do usuário:', err);
-        setIsCheckingAuth(false);
+        if (!isCancelled) {
+          setIsCheckingAuth(false);
+        }
       }
     }
+
     initUser();
 
     const unsubAuth = authService.onAuthStateChange(async (event, session) => {
       console.log('[AUTH STATE CHANGE]', event, session?.user?.id);
       if (event === 'SIGNED_OUT') {
-        syncEngine.setAuthenticatedUserId(null);
-        realtimeService.unsubscribe();
-        setCurrentUser(null);
-        setActiveNode(null);
-        setActiveNote(null);
-        setTree([]);
-        setTags([]);
-      } else if (session?.user?.id && (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED')) {
+        handleLogout();
+      } else if (
+        session?.user?.id &&
+        (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'USER_UPDATED')
+      ) {
         syncEngine.setAuthenticatedUserId(session.user.id);
+        if (activeUserIdRef.current !== session.user.id) {
+          const u: AppUser = {
+            id: session.user.id,
+            email: session.user.email || '',
+            name: session.user.user_metadata?.name || session.user.email?.split('@')[0] || 'Usuário',
+            displayName:
+              session.user.user_metadata?.full_name ||
+              session.user.user_metadata?.name ||
+              session.user.email?.split('@')[0] ||
+              'Usuário',
+            avatarUrl: session.user.user_metadata?.avatar_url,
+          };
+          handleUserSession(u);
+        }
       }
     });
 
     return () => {
+      isCancelled = true;
       if (unsubAuth) unsubAuth();
     };
-  }, [refreshAppData]);
+  }, [handleUserSession, handleLogout]);
 
   // Escuta status de sincronização emitido pelo syncEngine
   useEffect(() => {
@@ -753,6 +839,66 @@ export function AppShell() {
     });
   };
 
+  // 9.1 Reorder Nodes - Suporta Before, Inside e After com preservação posicional e multi-seleção
+  const handleReorderNodes = async (
+    draggedIds: string[],
+    targetNodeId: string | null,
+    placement: DropPlacement
+  ) => {
+    if (!currentUser || draggedIds.length === 0) return;
+
+    const previousTree = tree;
+
+    // 1. Calcula reordenação e novo estado otimista da árvore usando treeReorderService
+    const result = treeReorderService.calculateDropPosition({
+      tree,
+      draggedIds,
+      targetNodeId,
+      placement,
+    });
+
+    if (!result.success || result.updatedNodes.length === 0) return;
+
+    // 2. Se moveu para dentro de uma pasta, expande ela imediatamente na UI
+    if (result.targetParentId) {
+      setExpandedFolders((prev) => new Set(prev).add(result.targetParentId!));
+    }
+
+    // 3. Atualização otimista imediata na UI da árvore (0ms)
+    setTree(result.nextTree);
+
+    // Se o nó ativo estiver entre os nós alterados, sincroniza seu parentId e position
+    if (activeNodeRef.current) {
+      const activeUpdated = result.updatedNodes.find((n) => n.id === activeNodeRef.current!.id);
+      if (activeUpdated) {
+        activeNodeRef.current.parentId = activeUpdated.parentId;
+        activeNodeRef.current.position = activeUpdated.position;
+        activeNodeRef.current.updatedAt = activeUpdated.updatedAt;
+        setActiveNode((prev) =>
+          prev
+            ? {
+                ...prev,
+                parentId: activeUpdated.parentId,
+                position: activeUpdated.position,
+                updatedAt: activeUpdated.updatedAt,
+              }
+            : null
+        );
+      }
+    }
+
+    // 4. Persiste no IndexedDB, sync_queue e Supabase em lote atômico
+    try {
+      const success = await nodeService.reorderNodes(currentUser.id, result.updatedNodes);
+      if (!success) {
+        setTree(previousTree);
+      }
+    } catch (err) {
+      console.warn('Erro ao persistir reordenação em lote:', err);
+      setTree(previousTree);
+    }
+  };
+
   // 10. Toggle Favorite
   const handleToggleFavorite = (nodeId: string) => {
     if (!currentUser) return;
@@ -883,20 +1029,7 @@ export function AppShell() {
 
   // 2. Authentication Screen when no active session exists
   if (!currentUser) {
-    return (
-      <AuthScreen
-        onAuthenticated={async (user) => {
-          syncEngine.setAuthenticatedUserId(user.id);
-          setCurrentUser(user);
-          await indexedDbService.migrateLegacyIds(user.id);
-          const tombstoneIds = await indexedDbService.getTombstoneNodeIds(user.id);
-          realtimeService.loadTombstoneIds(tombstoneIds);
-          await syncEngine.hydrateFromRemote(user.id);
-          await refreshAppData(user.id);
-          realtimeService.subscribe(user.id);
-        }}
-      />
-    );
+    return <AuthScreen onAuthenticated={handleUserSession} />;
   }
 
   return (
@@ -914,43 +1047,51 @@ export function AppShell() {
 
       {/* Desktop Sidebar */}
       <div
-        style={{ width: `${sidebarWidth}px` }}
-        className="hidden md:flex shrink-0 h-full relative"
+        style={{ width: isSidebarCollapsed ? 0 : `${sidebarWidth}px` }}
+        className={`hidden md:flex shrink-0 h-full relative overflow-hidden ${
+          isDraggingSidebar ? '' : 'transition-[width] duration-200 ease-in-out'
+        }`}
       >
-        <Sidebar
-          tree={tree}
-          activeNodeId={activeNode?.id || null}
-          expandedFolders={expandedFolders}
-          editingNodeId={editingNodeId}
-          onFinishInlineEdit={() => setEditingNodeId(null)}
-          tags={tags}
-          currentUser={currentUser}
-          syncStatus={syncStatus}
-          onOpenAuth={() => setIsAuthModalOpen(true)}
-          onOpenSettings={() => setIsAuthModalOpen(true)}
-          onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
-          onToggleExpand={toggleFolderExpand}
-          onSelectNode={selectNode}
-          onCreateFolder={handleCreateFolder}
-          onCreateNote={handleCreateNote}
-          onRenameNode={handleRenameNode}
-          onDeleteNode={handleDeleteNode}
-          onSetNodeColor={handleSetNodeColor}
-          onDuplicateNote={handleDuplicateNote}
-          onToggleFavorite={handleToggleFavorite}
-          onExportNote={handleExportNote}
-          onExportAll={handleExportAll}
-          onMoveNode={handleMoveNode}
-          onFilterByTag={handleTagClick}
-        />
+        <div style={{ width: `${sidebarWidth}px` }} className="h-full flex shrink-0">
+          <Sidebar
+            tree={tree}
+            activeNodeId={activeNode?.id || null}
+            expandedFolders={expandedFolders}
+            editingNodeId={editingNodeId}
+            onFinishInlineEdit={() => setEditingNodeId(null)}
+            tags={tags}
+            currentUser={currentUser}
+            syncStatus={syncStatus}
+            onOpenAuth={() => setIsAuthModalOpen(true)}
+            onOpenSettings={() => setIsAuthModalOpen(true)}
+            onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+            onToggleExpand={toggleFolderExpand}
+            onSelectNode={selectNode}
+            onCreateFolder={handleCreateFolder}
+            onCreateNote={handleCreateNote}
+            onRenameNode={handleRenameNode}
+            onDeleteNode={handleDeleteNode}
+            onSetNodeColor={handleSetNodeColor}
+            onDuplicateNote={handleDuplicateNote}
+            onToggleFavorite={handleToggleFavorite}
+            onExportNote={handleExportNote}
+            onExportAll={handleExportAll}
+            onMoveNode={handleMoveNode}
+            onReorderNodes={handleReorderNodes}
+            onFilterByTag={handleTagClick}
+            onToggleCollapse={() => setIsSidebarCollapsed(true)}
+          />
+        </div>
 
         {/* Resizer Handle */}
-        <div
-          onMouseDown={handleMouseDownResize}
-          className={`absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-[#8C7B6E]/40 transition-colors ${
-            isDraggingSidebar ? 'bg-[#8C7B6E]' : ''
-          }`}
-        />
+        {!isSidebarCollapsed && (
+          <div
+            onMouseDown={handleMouseDownResize}
+            className={`absolute top-0 right-0 w-1.5 h-full cursor-col-resize hover:bg-[#8C7B6E]/40 transition-colors z-10 ${
+              isDraggingSidebar ? 'bg-[#8C7B6E]' : ''
+            }`}
+          />
+        )}
       </div>
 
       {/* Mobile Drawer Sidebar */}
@@ -986,6 +1127,7 @@ export function AppShell() {
           onExportNote={handleExportNote}
           onExportAll={handleExportAll}
           onMoveNode={handleMoveNode}
+          onReorderNodes={handleReorderNodes}
           onFilterByTag={handleTagClick}
           onCloseMobileDrawer={() => setIsMobileDrawerOpen(false)}
         />
@@ -993,6 +1135,19 @@ export function AppShell() {
 
       {/* Main Content Area */}
       <main id="main-content-canvas" className="flex-1 flex flex-col h-full w-full max-w-[100vw] overflow-hidden relative">
+        {/* Botão para reabrir a sidebar desktop (visível somente quando recolhida) */}
+        {isSidebarCollapsed && (
+          <button
+            type="button"
+            id="btn-reopen-sidebar"
+            onClick={() => setIsSidebarCollapsed(false)}
+            className="hidden md:flex items-center justify-center absolute top-2.5 left-2.5 z-30 p-1.5 rounded-lg bg-[#FEFDFA] border border-[#E3DCD2] text-[#8C7B6E] hover:text-[#3D352E] hover:bg-[#F0ECE1] shadow-2xs transition-colors cursor-pointer"
+            aria-label="Reabrir sidebar"
+            title="Reabrir sidebar"
+          >
+            <PanelLeftOpen className="w-4 h-4" />
+          </button>
+        )}
         {/* Mobile Header Toggle: [☰] Tá na nota [🔍] */}
         <div className="md:hidden flex items-center justify-between px-4 py-2.5 bg-[#F9F7F2] border-b border-[#E3DCD2] shrink-0 select-none">
           <button
@@ -1083,23 +1238,11 @@ export function AppShell() {
         currentUser={currentUser}
         syncStatus={syncStatus}
         onExportAll={handleExportAll}
-        onUserChanged={async (user) => {
-          setCurrentUser(user);
+        onUserChanged={(user) => {
           if (user) {
-            syncEngine.setAuthenticatedUserId(user.id);
-            await indexedDbService.migrateLegacyIds(user.id);
-            const tombstoneIds = await indexedDbService.getTombstoneNodeIds(user.id);
-            realtimeService.loadTombstoneIds(tombstoneIds);
-            await syncEngine.hydrateFromRemote(user.id);
-            await refreshAppData(user.id);
-            realtimeService.subscribe(user.id);
+            handleUserSession(user);
           } else {
-            syncEngine.setAuthenticatedUserId(null);
-            realtimeService.unsubscribe();
-            setActiveNode(null);
-            setActiveNote(null);
-            setTree([]);
-            setTags([]);
+            handleLogout();
           }
         }}
       />

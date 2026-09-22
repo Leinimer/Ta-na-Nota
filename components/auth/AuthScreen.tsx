@@ -248,34 +248,6 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
           </p>
         </div>
 
-        {/* Tab switch between Entrar & Criar conta */}
-        <div className="flex border-b border-[#E3DCD2] bg-[#FAF8F4]/80 p-1.5 gap-1.5">
-          <button
-            type="button"
-            id="tab-login"
-            onClick={() => handleSwitchTab('login')}
-            className={`flex-1 py-2 rounded-lg text-xs font-semibold tracking-wide transition-all cursor-pointer ${
-              mode === 'login'
-                ? 'bg-[#FEFDFA] text-[#8C7B6E] shadow-2xs border border-[#E3DCD2]'
-                : 'text-[#8C7B6E]/70 hover:text-[#3D352E]'
-            }`}
-          >
-            Entrar
-          </button>
-          <button
-            type="button"
-            id="tab-signup"
-            onClick={() => handleSwitchTab('signup')}
-            className={`flex-1 py-2 rounded-lg text-xs font-semibold tracking-wide transition-all cursor-pointer ${
-              mode === 'signup'
-                ? 'bg-[#FEFDFA] text-[#8C7B6E] shadow-2xs border border-[#E3DCD2]'
-                : 'text-[#8C7B6E]/70 hover:text-[#3D352E]'
-            }`}
-          >
-            Criar conta
-          </button>
-        </div>
-
         {/* Form Body */}
         <div className="p-6 sm:p-8">
           {/* Error Banner */}
@@ -579,10 +551,8 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
                 Não tem uma conta?{' '}
                 <button
                   type="button"
-                  onClick={() => {
-                    setMode('signup');
-                    resetErrors();
-                  }}
+                  id="link-to-signup"
+                  onClick={() => handleSwitchTab('signup')}
                   className="font-semibold text-[#8C7B6E] hover:text-[#3D352E] hover:underline cursor-pointer ml-1"
                 >
                   Criar conta
@@ -593,10 +563,8 @@ export function AuthScreen({ onAuthenticated }: AuthScreenProps) {
                 Já possui uma conta?{' '}
                 <button
                   type="button"
-                  onClick={() => {
-                    setMode('login');
-                    resetErrors();
-                  }}
+                  id="link-to-login"
+                  onClick={() => handleSwitchTab('login')}
                   className="font-semibold text-[#8C7B6E] hover:text-[#3D352E] hover:underline cursor-pointer ml-1"
                 >
                   Entrar

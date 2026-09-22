@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { TreeNode, TagRecord, AppUser, SyncStatus, SearchResults } from '@/types';
-import { TreeNodeItem } from './TreeNodeItem';
+import { TreeNodeItem, DropPlacement } from './TreeNodeItem';
 import { searchService } from '@/services/searchService';
 import {
   FolderPlus,
@@ -23,6 +23,8 @@ import {
   Folder,
   Download,
   ArrowLeft,
+  Check,
+  PanelLeftClose,
 } from 'lucide-react';
 import { tagService } from '@/services/tagService';
 import { usePwaInstall } from '@/components/pwa/usePwaInstall';
@@ -65,8 +67,10 @@ interface SidebarProps {
   onExportNote: (nodeId: string) => void;
   onExportAll: () => void;
   onMoveNode: (draggedId: string, targetParentId: string | null) => void;
+  onReorderNodes?: (draggedIds: string[], targetNodeId: string | null, placement: DropPlacement) => void;
   onFilterByTag?: (tagId: string) => void;
   onCloseMobileDrawer?: () => void;
+  onToggleCollapse?: () => void;
 }
 
 export function Sidebar({
@@ -92,8 +96,10 @@ export function Sidebar({
   onExportNote,
   onExportAll,
   onMoveNode,
+  onReorderNodes,
   onFilterByTag,
   onCloseMobileDrawer,
+  onToggleCollapse,
 }: SidebarProps) {
   const [activeTab, setActiveTab] = useState<'tree' | 'favorites' | 'recent' | 'tags'>('tree');
   const [searchQuery, setSearchQuery] = useState('');
@@ -122,41 +128,64 @@ export function Sidebar({
   const sidebarRef = useRef<HTMLElement>(null);
   const { canInstall, installApp } = usePwaInstall();
 
-  // Estado do Painel de Tags no topo da Sidebar
+  // Estado do Painel Inferior de Tags e Seleção Múltipla de Tags
   const [isTagsPanelOpen, setIsTagsPanelOpen] = useState(false);
-  const [selectedTag, setSelectedTag] = useState<TagRecord | null>(null);
+  const [selectedTagIds, setSelectedTagIds] = useState<Set<string>>(new Set());
   const [tagNotes, setTagNotes] = useState<TreeNode[]>([]);
   const [isLoadingTagNotes, setIsLoadingTagNotes] = useState(false);
   const [showAllTagsExpanded, setShowAllTagsExpanded] = useState(false);
 
-  // Manipulação de tags no painel superior
-  const handleSelectTag = async (tag: TagRecord) => {
-    setSelectedTag(tag);
-    setIsLoadingTagNotes(true);
-    try {
-      if (currentUser?.id) {
-        const notes = await tagService.getNotesForTag(tag.id, currentUser.id);
-        setTagNotes(notes);
+  // Alterna a seleção de uma tag no painel inferior
+  const handleToggleTag = (tagId: string) => {
+    setSelectedTagIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(tagId)) {
+        next.delete(tagId);
       } else {
-        setTagNotes([]);
+        next.add(tagId);
       }
-    } catch (err) {
-      console.warn('Erro ao carregar notas da tag:', err);
-      setTagNotes([]);
-    } finally {
-      setIsLoadingTagNotes(false);
-    }
+      return next;
+    });
   };
 
-  const handleBackToTags = () => {
-    setSelectedTag(null);
-    setTagNotes([]);
-  };
+  // Carrega união das notas associadas às tags selecionadas (sem duplicação)
+  useEffect(() => {
+    let isMounted = true;
+    const loadTagNotes = async () => {
+      if (selectedTagIds.size === 0 || !currentUser?.id) {
+        setTagNotes([]);
+        setIsLoadingTagNotes(false);
+        return;
+      }
+      setIsLoadingTagNotes(true);
+      try {
+        const notes = await tagService.getNotesForMultipleTags(
+          Array.from(selectedTagIds),
+          currentUser.id
+        );
+        if (isMounted) {
+          setTagNotes(notes);
+        }
+      } catch (err) {
+        console.warn('Erro ao carregar notas das tags:', err);
+        if (isMounted) setTagNotes([]);
+      } finally {
+        if (isMounted) setIsLoadingTagNotes(false);
+      }
+    };
 
+    loadTagNotes();
+    return () => {
+      isMounted = false;
+    };
+  }, [selectedTagIds, currentUser?.id]);
+
+  // Ao clicar em uma nota resultante de tag:
+  // 1. Abre a nota normalmente
+  // 2. Localiza na árvore real, expande todos os pais necessários e destaca a nota
   const handleSelectTagNote = (note: TreeNode) => {
-    // 1. Expandir todos os pais necessários na árvore para revelar a nota
     const parentFolderIds = findParentFolderIds(tree, note.id);
-    if (parentFolderIds) {
+    if (parentFolderIds && parentFolderIds.length > 0) {
       parentFolderIds.forEach((parentId) => {
         if (!expandedFolders.has(parentId)) {
           onToggleExpand(parentId);
@@ -164,12 +193,13 @@ export function Sidebar({
       });
     }
 
-    // 2. Se a aba não for a árvore, mudar para árvore para que a nota apareça destacada
     if (activeTab !== 'tree') {
       setActiveTab('tree');
     }
 
-    // 3. Localizar nó na árvore ou usar o nó retornado
+    setSelectedNodeIds(new Set([note.id]));
+    setLastClickedNodeId(note.id);
+
     const targetNode = findNodeInTree(note.id, tree) || note;
     onSelectNode(targetNode);
     if (onCloseMobileDrawer) onCloseMobileDrawer();
@@ -177,13 +207,10 @@ export function Sidebar({
 
   const handleOpenTagInPanel = (tag: { id: string; name: string }) => {
     setIsTagsPanelOpen(true);
-    handleSelectTag({
-      id: tag.id,
-      name: tag.name,
-      userId: currentUser?.id || '',
-      normalizedName: tag.name.toLowerCase(),
-      createdAt: '',
-    });
+    setSelectedTagIds((prev) => new Set(prev).add(tag.id));
+    if (activeTab !== 'tree') {
+      setActiveTab('tree');
+    }
   };
 
   // Tecla Escape para deselecionar itens múltiplos
@@ -439,8 +466,27 @@ export function Sidebar({
     [filterTopLevelSelected, isDescendant, onMoveNode, tree]
   );
 
-  // Clique em um nó da árvore (suporta Ctrl/Cmd para toggle e Shift para range)
+  // Reordena nós suportando Before, Inside e After com preservação hierárquica e posicional
+  const handleReorderNodes = useCallback(
+    (draggedIds: string[], targetNodeId: string | null, placement: DropPlacement) => {
+      if (onReorderNodes) {
+        onReorderNodes(draggedIds, targetNodeId, placement);
+      } else {
+        if (placement === 'inside') {
+          handleMoveMultipleNodes(draggedIds, targetNodeId);
+        } else {
+          const targetNode = visibleTreeNodes.find((n) => n.id === targetNodeId);
+          const parentId = targetNode ? targetNode.parentId : null;
+          handleMoveMultipleNodes(draggedIds, parentId);
+        }
+      }
+    },
+    [onReorderNodes, handleMoveMultipleNodes, visibleTreeNodes]
+  );
+
+  // Clique em um nó da árvore (suporta Ctrl/Cmd para toggle, Shift para range, e clique simples para seleção/navegação)
   const handleNodeClick = (node: TreeNode, e: React.MouseEvent) => {
+    // 1. Ctrl / Cmd + clique: toggle de seleção em qualquer posição da árvore
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
       e.stopPropagation();
@@ -457,6 +503,7 @@ export function Sidebar({
       return;
     }
 
+    // 2. Shift + clique: seleção por intervalo entre último clicado e o item atual
     if (e.shiftKey && lastClickedNodeId) {
       e.preventDefault();
       e.stopPropagation();
@@ -475,10 +522,8 @@ export function Sidebar({
       return;
     }
 
-    // Clique normal sem modificadores
-    if (selectedNodeIds.size > 0) {
-      setSelectedNodeIds(new Set());
-    }
+    // 3. Clique simples: seleciona o item e abre nota ou expande pasta
+    setSelectedNodeIds(new Set([node.id]));
     setLastClickedNodeId(node.id);
     if (node.type === 'folder') {
       onToggleExpand(node.id);
@@ -499,7 +544,8 @@ export function Sidebar({
       target.closest('[role="menu"]') ||
       target.closest('.context-menu') ||
       target.closest('[data-selection-toolbar]') ||
-      target.closest('[data-sidebar-control]')
+      target.closest('[data-sidebar-control]') ||
+      target.closest('[title="Arrastar para mover"]')
     ) {
       return;
     }
@@ -514,7 +560,7 @@ export function Sidebar({
     const handleMouseMove = (moveEvent: MouseEvent) => {
       const dx = Math.abs(moveEvent.clientX - startX);
       const dy = Math.abs(moveEvent.clientY - startY);
-      if (!hasMoved && (dx > 4 || dy > 4)) {
+      if (!hasMoved && (dx > 5 || dy > 5)) {
         hasMoved = true;
         isDraggingSelectionRef.current = true;
       }
@@ -577,6 +623,7 @@ export function Sidebar({
       // limpa a seleção
       if (!clickedNodeElement) {
         setSelectedNodeIds(new Set());
+        setLastClickedNodeId(null);
       }
     };
 
@@ -589,26 +636,26 @@ export function Sidebar({
     e.preventDefault();
     setIsRootDragOver(false);
 
-    let multipleIds: string[] | null = null;
+    let multipleIds: string[] = [];
     try {
       const jsonData = e.dataTransfer.getData('application/json');
       if (jsonData) {
         const parsed = JSON.parse(jsonData);
-        if (Array.isArray(parsed.ids)) {
+        if (Array.isArray(parsed.ids) && parsed.ids.length > 0) {
           multipleIds = parsed.ids;
         }
       }
     } catch {
-      multipleIds = null;
+      multipleIds = [];
     }
 
-    if (multipleIds && multipleIds.length > 0) {
-      handleMoveMultipleNodes(multipleIds, null);
-    } else {
-      const draggedId = e.dataTransfer.getData('text/plain');
-      if (draggedId) {
-        onMoveNode(draggedId, null);
-      }
+    if (multipleIds.length === 0) {
+      const singleId = e.dataTransfer.getData('text/plain');
+      if (singleId) multipleIds = [singleId];
+    }
+
+    if (multipleIds.length > 0) {
+      handleReorderNodes(multipleIds, null, 'after');
     }
   };
 
@@ -621,7 +668,7 @@ export function Sidebar({
       className="w-full h-full flex flex-col bg-[#F9F7F2] border-r border-[#E3DCD2] text-[#3D352E] select-none"
     >
       {/* 1. Topo da Sidebar: [logo] Tá na nota */}
-      <div className="p-3.5 border-b border-[#E3DCD2] shrink-0">
+      <div className="p-3.5 border-b border-[#E3DCD2] shrink-0 flex items-center justify-between">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-lg bg-[#8C7B6E] text-[#F9F7F2] flex items-center justify-center font-handwritten text-xl font-bold shadow-xs">
             T
@@ -630,6 +677,18 @@ export function Sidebar({
             Tá na nota
           </h1>
         </div>
+        {onToggleCollapse && (
+          <button
+            type="button"
+            id="btn-collapse-sidebar"
+            onClick={onToggleCollapse}
+            className="hidden md:flex items-center justify-center p-1.5 rounded-lg text-[#8C7B6E] hover:text-[#3D352E] hover:bg-[#E3DCD2]/60 transition-colors cursor-pointer"
+            aria-label="Recolher sidebar"
+            title="Recolher sidebar"
+          >
+            <PanelLeftClose className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
       {/* 2. Barra de Busca com Botão de Filtro de Fonte Integrado */}
@@ -737,137 +796,6 @@ export function Sidebar({
           </div>
         )}
       </div>
-
-      {/* 2b. PAINEL SUPERIOR DE TAGS (quando isTagsPanelOpen for true) */}
-      {isTagsPanelOpen && (
-        <div
-          id="sidebar-tags-top-panel"
-          className="h-[46%] min-h-[175px] max-h-[50%] shrink-0 border-b border-[#D9C5B2] bg-[#F9F7F2] flex flex-col overflow-hidden shadow-2xs select-none"
-        >
-          {selectedTag === null ? (
-            /* Visualização 1: Lista de Tags */
-            <>
-              <div className="px-2.5 py-1.5 border-b border-[#E3DCD2] flex items-center justify-between shrink-0 bg-[#F4EFEB]">
-                <div className="flex items-center gap-1.5 text-xs font-semibold text-[#5C5046]">
-                  <TagIcon className="w-3.5 h-3.5 text-[#8C7B6E]" />
-                  <span>Tags ({tags.length})</span>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsTagsPanelOpen(false)}
-                  className="text-[#8C7B6E] hover:text-[#3D352E] p-1 rounded hover:bg-[#E3DCD2] transition-colors cursor-pointer"
-                  title="Fechar painel de tags"
-                  aria-label="Fechar painel de tags"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              <div className="flex-1 overflow-y-auto p-2 space-y-2 custom-scrollbar">
-                {tags.length === 0 ? (
-                  <div className="py-6 text-center text-xs text-[#8C7B6E]/70 italic px-2">
-                    Nenhuma tag criada ainda. Digite <span className="font-mono font-medium text-[#5C5046]">#tag</span> no texto de uma nota para criar automaticamente.
-                  </div>
-                ) : (
-                  <>
-                    <div className="flex flex-wrap gap-1.5">
-                      {(showAllTagsExpanded ? tags : tags.slice(0, 10)).map((tag) => (
-                        <button
-                          key={tag.id}
-                          type="button"
-                          onClick={() => handleSelectTag(tag)}
-                          className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs bg-[#FEFDFA] border border-[#D9C5B2] hover:bg-[#E3DCD2] hover:border-[#8C7B6E] text-[#3D352E] transition-all cursor-pointer shadow-2xs group"
-                        >
-                          <span className="font-mono text-[#8C7B6E] group-hover:text-[#3D352E] font-medium">#{tag.name}</span>
-                          {typeof tag.count === 'number' && (
-                            <span className="text-[10px] text-[#8C7B6E] bg-[#E3DCD2] px-1 py-0.2 rounded font-normal">
-                              {tag.count}
-                            </span>
-                          )}
-                        </button>
-                      ))}
-                    </div>
-
-                    {tags.length > 10 && (
-                      <button
-                        type="button"
-                        onClick={() => setShowAllTagsExpanded(!showAllTagsExpanded)}
-                        className="w-full text-center py-1.5 px-2 text-[11px] font-medium text-[#8C7B6E] hover:text-[#3D352E] hover:bg-[#E3DCD2] border border-dashed border-[#D9C5B2] rounded-md transition-colors cursor-pointer mt-1"
-                      >
-                        {showAllTagsExpanded ? 'Recolher tags' : `Visualizar todas as tags (${tags.length})`}
-                      </button>
-                    )}
-                  </>
-                )}
-              </div>
-            </>
-          ) : (
-            /* Visualização 2: Notas da Tag Selecionada */
-            <>
-              <div className="px-2.5 py-1.5 border-b border-[#E3DCD2] flex items-center justify-between shrink-0 bg-[#F4EFEB]">
-                <button
-                  type="button"
-                  onClick={handleBackToTags}
-                  className="inline-flex items-center gap-1 text-[11px] font-medium text-[#8C7B6E] hover:text-[#3D352E] px-1.5 py-0.5 rounded hover:bg-[#E3DCD2] transition-colors cursor-pointer"
-                  title="Voltar para a lista de tags"
-                >
-                  <ArrowLeft className="w-3.5 h-3.5" />
-                  <span>Voltar para tags</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsTagsPanelOpen(false);
-                    handleBackToTags();
-                  }}
-                  className="text-[#8C7B6E] hover:text-[#3D352E] p-1 rounded hover:bg-[#E3DCD2] transition-colors cursor-pointer"
-                  title="Fechar painel de tags"
-                  aria-label="Fechar painel de tags"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-
-              <div className="px-2.5 py-1 bg-[#E3DCD2]/60 border-b border-[#D9C5B2] flex items-center justify-between shrink-0 text-xs">
-                <span className="font-mono font-semibold text-[#5C5046]">#{selectedTag.name}</span>
-                <span className="text-[11px] text-[#8C7B6E]">
-                  {tagNotes.length} {tagNotes.length === 1 ? 'nota' : 'notas'}
-                </span>
-              </div>
-
-              <div className="flex-1 overflow-y-auto px-2 py-1.5 space-y-1 custom-scrollbar">
-                {isLoadingTagNotes ? (
-                  <div className="py-6 text-center text-xs text-[#8C7B6E] animate-pulse">
-                    Carregando notas...
-                  </div>
-                ) : tagNotes.length === 0 ? (
-                  <div className="py-6 text-center text-xs text-[#8C7B6E]/70 italic">
-                    Nenhuma nota encontrada com #{selectedTag.name}
-                  </div>
-                ) : (
-                  tagNotes.map((note) => (
-                    <div
-                      key={`tag-note-${note.id}`}
-                      onClick={() => handleSelectTagNote(note)}
-                      className={`flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs cursor-pointer transition-colors ${
-                        activeNodeId === note.id
-                          ? 'bg-[#D9C5B2] font-semibold text-[#3D352E]'
-                          : 'hover:bg-[#E3DCD2] text-[#3D352E]'
-                      }`}
-                    >
-                      <FileText className="w-3.5 h-3.5 text-[#8C7B6E] shrink-0" />
-                      <span className="truncate flex-1">{note.name || 'Sem título'}</span>
-                      {note.isFavorite && (
-                        <Star className="w-3 h-3 fill-amber-500 text-amber-500 shrink-0" />
-                      )}
-                    </div>
-                  ))
-                )}
-              </div>
-            </>
-          )}
-        </div>
-      )}
 
       {/* 3. Área Central Rolável (Resultados da Busca OU Árvore/Abas) */}
       <div
@@ -1044,64 +972,145 @@ export function Sidebar({
             {/* Tab 1: Tree View */}
             {activeTab === 'tree' && (
               <div className="space-y-0.5">
-                {selectedNodeIds.size > 0 && (
-                  <div
-                    data-selection-toolbar="true"
-                    className="mx-1 mb-2 px-2.5 py-1 bg-[#E3DCD2] border border-[#D9C5B2] rounded-md text-xs text-[#3D352E] flex items-center justify-between animate-in fade-in select-none shadow-2xs"
-                  >
-                    <span className="font-medium text-[11px] text-[#5C5046]">
-                      {selectedNodeIds.size} {selectedNodeIds.size === 1 ? 'selecionado' : 'selecionados'}
-                    </span>
-                    <button
-                      type="button"
-                      data-selection-toolbar="true"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setSelectedNodeIds(new Set());
-                      }}
-                      className="inline-flex items-center gap-1 text-[#8C7B6E] hover:text-[#3D352E] font-medium text-[11px] transition-colors cursor-pointer px-1.5 py-0.5 rounded hover:bg-[#D9C5B2]/50"
-                      title="Limpar seleção"
-                      aria-label="Limpar seleção"
-                    >
-                      <span>Limpar</span>
-                      <span className="text-xs font-bold leading-none">×</span>
-                    </button>
-                  </div>
-                )}
+                {selectedTagIds.size > 0 ? (
+                  /* Modo Temporário: Exibe Notas das Tags Selecionadas */
+                  <div className="space-y-2 py-1 select-none animate-in fade-in duration-100">
+                    <div className="flex items-center justify-between pb-1.5 border-b border-[#E3DCD2]">
+                      <div className="flex items-center gap-1.5 text-xs font-semibold text-[#5C5046]">
+                        <TagIcon className="w-3.5 h-3.5 text-[#8C7B6E]" />
+                        <span>NOTAS DAS TAGS</span>
+                        <span className="text-[10px] text-[#8C7B6E] bg-[#E3DCD2] px-1.5 py-0.2 rounded-full font-medium">
+                          {tagNotes.length}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedTagIds(new Set())}
+                        className="inline-flex items-center gap-1 text-[11px] text-[#8C7B6E] hover:text-[#3D352E] px-1.5 py-0.5 rounded hover:bg-[#E3DCD2] transition-colors cursor-pointer"
+                        title="Limpar filtro de tags e voltar para a árvore"
+                      >
+                        <X className="w-3 h-3" />
+                        <span>Limpar</span>
+                      </button>
+                    </div>
 
-                {tree.length === 0 ? (
-                  <div className="py-8 text-center text-xs text-[#8C7B6E]/70 italic">
-                    Nenhuma pasta ou nota criada ainda.
+                    {/* Badges das tags selecionadas */}
+                    <div className="flex flex-wrap gap-1">
+                      {Array.from(selectedTagIds).map((tId) => {
+                        const tag = tags.find((t) => t.id === tId);
+                        if (!tag) return null;
+                        return (
+                          <button
+                            key={tag.id}
+                            type="button"
+                            onClick={() => handleToggleTag(tag.id)}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-mono bg-[#D9C5B2] text-[#3D352E] hover:bg-[#D9C5B2]/80 transition-colors cursor-pointer shadow-2xs group"
+                            title="Clique para desmarcar tag"
+                          >
+                            <span>#{tag.name}</span>
+                            <X className="w-2.5 h-2.5 opacity-60 group-hover:opacity-100" />
+                          </button>
+                        );
+                      })}
+                    </div>
+
+                    {/* Lista das Notas da União das Tags */}
+                    {isLoadingTagNotes ? (
+                      <div className="py-8 text-center text-xs text-[#8C7B6E] animate-pulse">
+                        Carregando notas...
+                      </div>
+                    ) : tagNotes.length === 0 ? (
+                      <div className="py-8 text-center text-xs text-[#8C7B6E]/70 italic px-2">
+                        Nenhuma nota associada às tags selecionadas.
+                      </div>
+                    ) : (
+                      <div className="space-y-0.5">
+                        {tagNotes.map((note) => {
+                          const isNoteActive = activeNodeId === note.id;
+                          return (
+                            <div
+                              key={note.id}
+                              onClick={() => handleSelectTagNote(note)}
+                              className={`flex items-center gap-2 px-2.5 py-1.5 rounded-md text-xs cursor-pointer transition-colors ${
+                                isNoteActive
+                                  ? 'bg-[#D9C5B2] font-semibold text-[#3D352E]'
+                                  : 'text-[#3D352E] hover:bg-[#E3DCD2]'
+                              }`}
+                            >
+                              <FileText className="w-3.5 h-3.5 text-[#8C7B6E] shrink-0" />
+                              <span className="truncate flex-1">{note.name || 'Sem título'}</span>
+                              {note.isFavorite && (
+                                <Star className="w-3 h-3 fill-amber-500 text-amber-500 shrink-0" />
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 ) : (
-                  tree.map((node) => (
-                    <TreeNodeItem
-                      key={node.id}
-                      node={node}
-                      level={0}
-                      activeNodeId={activeNodeId}
-                      expandedFolders={expandedFolders}
-                      editingNodeId={editingNodeId}
-                      selectedNodeIds={selectedNodeIds}
-                      onNodeClick={handleNodeClick}
-                      onFinishInlineEdit={onFinishInlineEdit}
-                      onToggleExpand={onToggleExpand}
-                      onSelectNode={(n) => {
-                        onSelectNode(n);
-                        if (onCloseMobileDrawer) onCloseMobileDrawer();
-                      }}
-                      onCreateChildNote={onCreateNote}
-                      onCreateChildFolder={onCreateFolder}
-                      onRenameNode={onRenameNode}
-                      onDeleteNode={onDeleteNode}
-                      onSetNodeColor={onSetNodeColor}
-                      onDuplicateNote={onDuplicateNote}
-                      onToggleFavorite={onToggleFavorite}
-                      onExportNote={onExportNote}
-                      onMoveNode={onMoveNode}
-                      onMoveMultipleNodes={handleMoveMultipleNodes}
-                    />
-                  ))
+                  <>
+                    {selectedNodeIds.size > 0 && (
+                      <div
+                        data-selection-toolbar="true"
+                        className="mx-1 mb-2 px-2.5 py-1 bg-[#E3DCD2] border border-[#D9C5B2] rounded-md text-xs text-[#3D352E] flex items-center justify-between animate-in fade-in select-none shadow-2xs"
+                      >
+                        <span className="font-medium text-[11px] text-[#5C5046]">
+                          {selectedNodeIds.size} {selectedNodeIds.size === 1 ? 'selecionado' : 'selecionados'}
+                        </span>
+                        <button
+                          type="button"
+                          data-selection-toolbar="true"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setSelectedNodeIds(new Set());
+                          }}
+                          className="inline-flex items-center gap-1 text-[#8C7B6E] hover:text-[#3D352E] font-medium text-[11px] transition-colors cursor-pointer px-1.5 py-0.5 rounded hover:bg-[#D9C5B2]/50"
+                          title="Limpar seleção"
+                          aria-label="Limpar seleção"
+                        >
+                          <span>Limpar</span>
+                          <span className="text-xs font-bold leading-none">×</span>
+                        </button>
+                      </div>
+                    )}
+
+                    {tree.length === 0 ? (
+                      <div className="py-8 text-center text-xs text-[#8C7B6E]/70 italic">
+                        Nenhuma pasta ou nota criada ainda.
+                      </div>
+                    ) : (
+                      tree.map((node) => (
+                        <TreeNodeItem
+                          key={node.id}
+                          node={node}
+                          level={0}
+                          activeNodeId={activeNodeId}
+                          expandedFolders={expandedFolders}
+                          editingNodeId={editingNodeId}
+                          selectedNodeIds={selectedNodeIds}
+                          onNodeClick={handleNodeClick}
+                          onFinishInlineEdit={onFinishInlineEdit}
+                          onToggleExpand={onToggleExpand}
+                          onSelectNode={(n) => {
+                            onSelectNode(n);
+                            if (onCloseMobileDrawer) onCloseMobileDrawer();
+                          }}
+                          onCreateChildNote={onCreateNote}
+                          onCreateChildFolder={onCreateFolder}
+                          onRenameNode={onRenameNode}
+                          onDeleteNode={onDeleteNode}
+                          onSetNodeColor={onSetNodeColor}
+                          onDuplicateNote={onDuplicateNote}
+                          onToggleFavorite={onToggleFavorite}
+                          onExportNote={onExportNote}
+                          onMoveNode={onMoveNode}
+                          onMoveMultipleNodes={handleMoveMultipleNodes}
+                          onReorderNodes={handleReorderNodes}
+                        />
+                      ))
+                    )}
+                  </>
                 )}
               </div>
             )}
@@ -1179,6 +1188,98 @@ export function Sidebar({
           </>
         )}
       </div>
+
+      {/* 3b. PAINEL INFERIOR DE TAGS (quando isTagsPanelOpen for true) */}
+      {isTagsPanelOpen && (
+        <div
+          id="sidebar-tags-bottom-panel"
+          className={`shrink-0 border-t border-[#D9C5B2] bg-[#F9F7F2] flex flex-col transition-all duration-200 shadow-xs select-none ${
+            showAllTagsExpanded ? 'h-[270px] max-h-[48%]' : 'h-[165px] max-h-[35%]'
+          }`}
+        >
+          {/* Cabeçalho do painel inferior de tags */}
+          <div className="px-2.5 py-1.5 border-b border-[#E3DCD2] flex items-center justify-between shrink-0 bg-[#F4EFEB]">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-[#5C5046]">
+              <TagIcon className="w-3.5 h-3.5 text-[#8C7B6E]" />
+              <span>TAGS ({tags.length})</span>
+              {selectedTagIds.size > 0 && (
+                <span className="text-[10px] bg-[#8C7B6E] text-white px-1.5 py-0.2 rounded-full font-medium">
+                  {selectedTagIds.size} selecionada{selectedTagIds.size > 1 ? 's' : ''}
+                </span>
+              )}
+            </div>
+            <div className="flex items-center gap-1">
+              {selectedTagIds.size > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedTagIds(new Set())}
+                  className="text-[11px] text-[#8C7B6E] hover:text-[#3D352E] px-1.5 py-0.5 rounded hover:bg-[#E3DCD2] transition-colors cursor-pointer"
+                  title="Desmarcar todas as tags"
+                >
+                  Limpar
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => setIsTagsPanelOpen(false)}
+                className="text-[#8C7B6E] hover:text-[#3D352E] p-1 rounded hover:bg-[#E3DCD2] transition-colors cursor-pointer"
+                title="Fechar painel de tags"
+                aria-label="Fechar painel de tags"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          </div>
+
+          {/* Lista de tags com rolagem vertical */}
+          <div className="flex-1 overflow-y-auto p-2 custom-scrollbar">
+            {tags.length === 0 ? (
+              <div className="py-4 text-center text-xs text-[#8C7B6E]/70 italic px-2">
+                Nenhuma tag criada ainda. Digite <span className="font-mono font-medium text-[#5C5046]">#tag</span> no texto de uma nota para criar automaticamente.
+              </div>
+            ) : (
+              <div className="flex flex-wrap gap-1.5">
+                {tags.map((tag) => {
+                  const isSelected = selectedTagIds.has(tag.id);
+                  return (
+                    <button
+                      key={tag.id}
+                      type="button"
+                      onClick={() => handleToggleTag(tag.id)}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs transition-all cursor-pointer shadow-2xs ${
+                        isSelected
+                          ? 'bg-[#D9C5B2] font-semibold text-[#3D352E] ring-1 ring-[#8C7B6E] shadow-xs'
+                          : 'bg-[#FEFDFA] border border-[#D9C5B2] hover:bg-[#E3DCD2] hover:border-[#8C7B6E] text-[#3D352E]'
+                      }`}
+                    >
+                      <span className="font-mono font-medium">#{tag.name}</span>
+                      {isSelected && <Check className="w-3 h-3 text-[#3D352E] stroke-[2.5]" />}
+                      {typeof tag.count === 'number' && !isSelected && (
+                        <span className="text-[10px] text-[#8C7B6E] bg-[#E3DCD2] px-1 py-0.2 rounded font-normal">
+                          {tag.count}
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          {/* Rodapé: "Visualizar todas as tags" / expandir */}
+          {tags.length > 6 && (
+            <div className="px-2 py-1 border-t border-[#E3DCD2] bg-[#F4EFEB]/60 shrink-0 text-center">
+              <button
+                type="button"
+                onClick={() => setShowAllTagsExpanded(!showAllTagsExpanded)}
+                className="text-[11px] font-medium text-[#8C7B6E] hover:text-[#3D352E] transition-colors cursor-pointer"
+              >
+                {showAllTagsExpanded ? '▲ Recolher painel de tags' : `▼ Visualizar todas as tags (${tags.length})`}
+              </button>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* 4. Controles fixados na parte inferior da Sidebar */}
       <div data-sidebar-control="true" className="shrink-0 mt-auto border-t border-[#E3DCD2] bg-[#F9F7F2] select-none">

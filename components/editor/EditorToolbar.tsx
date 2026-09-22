@@ -41,11 +41,12 @@ interface EditorToolbarProps {
   onSetHighlightModeColor?: (color: string | null) => void;
 }
 
-const PASTEL_COLORS = [
+export const PASTEL_HIGHLIGHT_COLORS = [
   { name: 'Amarelo pastel', hex: '#FFF3A6' },
-  { name: 'Verde pastel', hex: '#CDECCF' },
   { name: 'Vermelho pastel', hex: '#F7C6C7' },
+  { name: 'Verde pastel', hex: '#CDECCF' },
   { name: 'Azul pastel', hex: '#C9DDF5' },
+  { name: 'Roxo pastel', hex: '#DCCAF2' },
 ];
 
 export function EditorToolbar({
@@ -80,17 +81,16 @@ export function EditorToolbar({
 
   if (!editor) return null;
 
-  // Toggle highlight mode with default yellow (#FFF3A6)
+  // Toggle continuous highlight mode with default yellow (#FFF3A6)
   const handleToggleHighlight = () => {
     if (highlightModeColor) {
-      // Exit highlight mode
+      // Exit continuous highlight mode
       if (onSetHighlightModeColor) onSetHighlightModeColor(null);
       setShowHighlightMenu(false);
     } else {
-      // Enter highlight mode with yellow default
+      // Enter continuous highlight mode
       const color = selectedHighlightColor || '#FFF3A6';
       if (onSetHighlightModeColor) onSetHighlightModeColor(color);
-      setShowHighlightMenu(true);
 
       // If text is already selected, apply immediately
       if (!editor.state.selection.empty) {
@@ -101,11 +101,15 @@ export function EditorToolbar({
 
   const handleSelectDotColor = (colorHex: string) => {
     setSelectedHighlightColor(colorHex);
-    if (onSetHighlightModeColor) onSetHighlightModeColor(colorHex);
-    // If text was selected, apply immediately without losing mode
+    // Ao mudar a cor durante o modo contínuo, mantém o modo ativo com a nova cor
+    if (highlightModeColor && onSetHighlightModeColor) {
+      onSetHighlightModeColor(colorHex);
+    }
+    // Se houver texto selecionado no momento, aplica a cor
     if (!editor.state.selection.empty) {
       editor.chain().focus().setHighlight({ color: colorHex }).run();
     }
+    setShowHighlightMenu(false);
   };
 
   const clearHighlightMode = () => {
@@ -301,18 +305,10 @@ export function EditorToolbar({
         <Strikethrough className="w-3.5 h-3.5" />
       </button>
 
-      {/* 4. Destaque de Texto com Paleta Pastel (4 bolinhas, amarelo padrão, modo de seleção contínuo) */}
+      {/* 4. Destaque de Texto: Dois botões contíguos [ ícone marca-texto ] [ bolinha da cor ] */}
       <div ref={highlightMenuRef} className="relative inline-flex items-center">
-        <button
-          type="button"
-          id="btn-toolbar-highlight"
-          title={
-            highlightModeColor
-              ? `Modo Marcador ativo. Selecione qualquer trecho com o mouse para destacar. Clique para sair ou pressione Esc.`
-              : 'Destacar texto (Marcador)'
-          }
-          onClick={handleToggleHighlight}
-          className={`p-1.5 rounded-md transition-all cursor-pointer flex items-center gap-1 ${
+        <div
+          className={`inline-flex items-center rounded-md transition-all ${
             highlightModeColor
               ? 'bg-[#E3DCD2] text-[#3D352E] ring-2 ring-[#8C7B6E] font-medium shadow-2xs'
               : editor.isActive('highlight')
@@ -320,20 +316,53 @@ export function EditorToolbar({
               : 'hover:bg-[#E3DCD2] text-[#8C7B6E]'
           }`}
         >
-          <Highlighter className="w-3.5 h-3.5" />
-          <span
-            className="w-2 h-2 rounded-full border border-black/15 shrink-0"
-            style={{ backgroundColor: highlightModeColor || selectedHighlightColor }}
-          />
-        </button>
+          {/* Área 1: Ícone do Marca-Texto (ativa/desativa modo contínuo) */}
+          <button
+            type="button"
+            id="btn-toolbar-highlight"
+            title={
+              highlightModeColor
+                ? 'Modo marca-texto contínuo ativo. Clique aqui para sair ou pressione Esc.'
+                : 'Ativar modo marca-texto contínuo'
+            }
+            onClick={handleToggleHighlight}
+            className="p-1.5 rounded-l-md hover:opacity-80 transition-opacity cursor-pointer flex items-center justify-center"
+          >
+            <Highlighter className="w-3.5 h-3.5" />
+          </button>
 
-        {/* Paleta compacta de 4 bolinhas logo abaixo do botão (sem nomes de cores, sem dropdown tradicional) */}
+          {/* Divisor vertical sutil entre ícone e bolinha */}
+          <div className="w-px h-3.5 bg-[#8C7B6E]/30" />
+
+          {/* Área 2: Bolinha da Cor (abre paleta das 5 cores pastéis sem perder a seleção) */}
+          <button
+            type="button"
+            id="btn-toolbar-highlight-palette"
+            title="Escolher cor do marca-texto"
+            onMouseDown={(e) => {
+              // Evita perder a seleção no editor
+              e.preventDefault();
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowHighlightMenu((prev) => !prev);
+            }}
+            className="px-1.5 py-1.5 rounded-r-md hover:opacity-80 transition-opacity cursor-pointer flex items-center justify-center"
+          >
+            <span
+              className="w-2.5 h-2.5 rounded-full border border-black/25 shrink-0 transition-transform hover:scale-125"
+              style={{ backgroundColor: highlightModeColor || selectedHighlightColor }}
+            />
+          </button>
+        </div>
+
+        {/* Paleta compacta das 5 cores pastéis logo abaixo do botão */}
         {showHighlightMenu && (
           <div
             id="highlight-palette-dots"
-            className="absolute top-full left-1/2 -translate-x-1/2 mt-1.5 px-2 py-1.5 bg-[#FEFDFA] border border-[#E3DCD2] rounded-full shadow-lg z-30 flex items-center gap-2 animate-in fade-in zoom-in-95 duration-100"
+            className="absolute top-full left-1/2 -translate-x-1/2 mt-1.5 px-2.5 py-1.5 bg-[#FEFDFA] border border-[#D9C5B2] rounded-full shadow-lg z-30 flex items-center gap-2 animate-in fade-in zoom-in-95 duration-100"
           >
-            {PASTEL_COLORS.map((color) => {
+            {PASTEL_HIGHLIGHT_COLORS.map((color) => {
               const isActiveDot = (highlightModeColor || selectedHighlightColor) === color.hex;
               return (
                 <button
@@ -346,7 +375,7 @@ export function EditorToolbar({
                   }}
                   title={color.name}
                   aria-label={color.name}
-                  className={`w-4 h-4 rounded-full border border-black/15 cursor-pointer transition-transform hover:scale-125 ${
+                  className={`w-4 h-4 rounded-full border border-black/20 cursor-pointer transition-transform hover:scale-125 ${
                     isActiveDot ? 'ring-2 ring-[#8C7B6E] scale-110' : ''
                   }`}
                   style={{ backgroundColor: color.hex }}

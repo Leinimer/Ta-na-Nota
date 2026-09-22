@@ -26,6 +26,8 @@ interface SlashCommandMenuProps {
   onClose: () => void;
   position: { top: number; left: number };
   onTriggerImageUpload?: () => void;
+  externalQuery?: string;
+  slashStartPos?: number;
 }
 
 interface CommandItem {
@@ -43,10 +45,20 @@ export function SlashCommandMenu({
   onClose,
   position,
   onTriggerImageUpload,
+  externalQuery,
+  slashStartPos,
 }: SlashCommandMenuProps) {
-  const [query, setQuery] = useState('');
+  const [internalQuery, setInternalQuery] = useState('');
   const [selectedIndex, setSelectedIndex] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
+
+  const query = externalQuery !== undefined && externalQuery !== '' ? externalQuery : internalQuery;
+
+  const handleClose = React.useCallback(() => {
+    setInternalQuery('');
+    setSelectedIndex(0);
+    onClose();
+  }, [onClose]);
 
   const commands: CommandItem[] = [
     {
@@ -195,19 +207,28 @@ export function SlashCommandMenu({
     (c.keywords && c.keywords.some((k) => k.toLowerCase().includes(cleanQuery)))
   );
 
-  const executeCommand = (item: CommandItem) => {
-    if (editor) {
-      const { state } = editor;
-      const { $from } = state.selection;
-      // Se o caractere imediatamente anterior for '/', remove antes de inserir o bloco
-      const textBefore = state.doc.textBetween(Math.max(0, $from.pos - 1), $from.pos);
-      if (textBefore === '/') {
-        editor.chain().deleteRange({ from: $from.pos - 1, to: $from.pos }).run();
+  const executeCommand = React.useCallback(
+    (item: CommandItem) => {
+      if (editor) {
+        const { state } = editor;
+        const { $from } = state.selection;
+        // Se houver posição de início do slash ou caractere anterior for '/', remove antes de inserir o bloco
+        const slashPos =
+          slashStartPos !== undefined && slashStartPos >= 0
+            ? slashStartPos
+            : state.doc.textBetween(Math.max(0, $from.pos - 1), $from.pos) === '/'
+            ? $from.pos - 1
+            : null;
+
+        if (slashPos !== null && slashPos >= 0 && slashPos < $from.pos) {
+          editor.chain().deleteRange({ from: slashPos, to: $from.pos }).run();
+        }
+        item.action(editor);
+        handleClose();
       }
-      item.action(editor);
-      onClose();
-    }
-  };
+    },
+    [editor, slashStartPos, handleClose]
+  );
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -226,19 +247,19 @@ export function SlashCommandMenu({
         }
       } else if (e.key === 'Escape') {
         e.preventDefault();
-        onClose();
+        handleClose();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isOpen, filtered, selectedIndex, editor, onClose]);
+  }, [isOpen, filtered, selectedIndex, executeCommand, handleClose]);
 
   if (!isOpen) return null;
 
   return (
     <>
-      <div className="fixed inset-0 z-40" onClick={onClose} />
+      <div className="fixed inset-0 z-40" onClick={handleClose} />
       <div
         ref={containerRef}
         style={{
@@ -250,11 +271,19 @@ export function SlashCommandMenu({
         <div className="px-2 py-1.5 mb-1 border-b border-[#E3DCD2]">
           <input
             type="text"
-            autoFocus
             value={query}
             onChange={(e) => {
-              setQuery(e.target.value);
+              setInternalQuery(e.target.value);
               setSelectedIndex(0);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === ' ' && !query.trim()) {
+                e.preventDefault();
+                handleClose();
+                if (editor) {
+                  editor.chain().focus().insertContent(' ').run();
+                }
+              }
             }}
             placeholder="Filtrar blocos..."
             className="w-full bg-transparent text-xs outline-none placeholder:text-[#8C7B6E]/60 text-[#3D352E]"
