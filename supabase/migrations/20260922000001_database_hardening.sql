@@ -162,7 +162,7 @@ ALTER TABLE public.nodes
 
 ALTER TABLE public.nodes
   ADD CONSTRAINT chk_nodes_name_not_empty
-  CHECK (pg_catalog.length(pg_catalog.trim(name)) > 0);
+  CHECK (length(trim(name)) > 0);
 
 ALTER TABLE public.nodes
   ADD CONSTRAINT chk_nodes_position_non_negative
@@ -191,13 +191,13 @@ ALTER TABLE public.tags
 
 ALTER TABLE public.tags
   ADD CONSTRAINT chk_tags_name_not_empty
-  CHECK (pg_catalog.length(pg_catalog.trim(name)) > 0);
+  CHECK (length(trim(name)) > 0);
 
 ALTER TABLE public.tags
   ADD CONSTRAINT chk_tags_normalized_name_valid
   CHECK (
-    pg_catalog.length(pg_catalog.trim(normalized_name)) > 0 AND
-    normalized_name = pg_catalog.lower(pg_catalog.trim(normalized_name))
+    length(trim(normalized_name)) > 0 AND
+    normalized_name = lower(trim(normalized_name))
   );
 
 -- 5.4. NOTE_LINKS
@@ -270,11 +270,11 @@ SECURITY DEFINER
 SET search_path = ''
 AS $$
 BEGIN
-  NEW.name := pg_catalog.trim(NEW.name);
-  IF pg_catalog.length(NEW.name) = 0 THEN
+  NEW.name := trim(NEW.name);
+  IF length(NEW.name) = 0 THEN
     RAISE EXCEPTION 'O nome da tag não pode ser vazio';
   END IF;
-  NEW.normalized_name := pg_catalog.lower(NEW.name);
+  NEW.normalized_name := lower(NEW.name);
   RETURN NEW;
 END;
 $$;
@@ -303,17 +303,17 @@ DECLARE
   v_suffix INTEGER := 1;
 BEGIN
   v_base_username := pg_catalog.coalesce(
-    pg_catalog.nullif(pg_catalog.trim((NEW.raw_user_meta_data->>'username')), ''),
-    pg_catalog.nullif(pg_catalog.trim((NEW.raw_user_meta_data->>'user_name')), ''),
-    pg_catalog.nullif(pg_catalog.trim(pg_catalog.split_part(NEW.email, '@', 1)), ''),
+    nullif(trim((NEW.raw_user_meta_data->>'username')), ''),
+    nullif(trim((NEW.raw_user_meta_data->>'user_name')), ''),
+    nullif(trim(split_part(NEW.email, '@', 1)), ''),
     'user'
   );
 
-  v_base_username := pg_catalog.lower(
-    pg_catalog.regexp_replace(v_base_username, '[^a-zA-Z0-9_]', '', 'g')
+  v_base_username := lower(
+    regexp_replace(v_base_username, '[^a-zA-Z0-9_]', '', 'g')
   );
 
-  IF pg_catalog.length(v_base_username) < 3 THEN
+  IF length(v_base_username) < 3 THEN
     v_base_username := 'user_' || pg_catalog.substring(NEW.id::text, 1, 6);
   END IF;
 
@@ -362,9 +362,9 @@ BEGIN
     RETURN FALSE;
   END IF;
 
-  v_clean := pg_catalog.lower(pg_catalog.trim(p_username));
+  v_clean := lower(trim(p_username));
 
-  IF pg_catalog.length(v_clean) < 3 OR pg_catalog.length(v_clean) > 30 THEN
+  IF length(v_clean) < 3 OR length(v_clean) > 30 THEN
     RETURN FALSE;
   END IF;
 
@@ -393,7 +393,7 @@ BEGIN
     RETURN NULL;
   END IF;
 
-  v_clean := pg_catalog.lower(pg_catalog.trim(p_username));
+  v_clean := lower(trim(p_username));
 
   SELECT email INTO v_email
   FROM public.profiles
@@ -445,8 +445,8 @@ BEGIN
     END IF;
   END IF;
 
-  v_clean_name := pg_catalog.trim(pg_catalog.coalesce(p_name, ''));
-  IF pg_catalog.length(v_clean_name) = 0 THEN
+  v_clean_name := trim(coalesce(p_name, ''));
+  IF length(v_clean_name) = 0 THEN
     v_clean_name := 'Sem título';
   END IF;
 
@@ -1122,11 +1122,27 @@ BEGIN
 END;
 $$;
 
-ALTER PUBLICATION supabase_realtime ADD TABLE public.nodes;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.notes;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.tags;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.note_tags;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.note_links;
-ALTER PUBLICATION supabase_realtime ADD TABLE public.attachments;
+DO $
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'nodes') THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.nodes;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'notes') THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.notes;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'tags') THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.tags;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'note_tags') THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.note_tags;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'note_links') THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.note_links;
+  END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'attachments') THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.attachments;
+  END IF;
+END;
+$;
 
 COMMIT;
