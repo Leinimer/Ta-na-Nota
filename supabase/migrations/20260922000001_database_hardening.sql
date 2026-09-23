@@ -254,7 +254,6 @@ IF NOT EXISTS (
   END IF;
 END;
 $;
-
 DROP TRIGGER IF EXISTS trg_nodes_updated_at ON public.nodes;
 CREATE TRIGGER trg_nodes_updated_at
   BEFORE UPDATE ON public.nodes
@@ -1157,5 +1156,4 @@ IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_rea
   END IF;
 END;
 $;
-
 COMMIT;
