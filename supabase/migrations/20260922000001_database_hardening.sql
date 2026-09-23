@@ -240,7 +240,7 @@ ALTER TABLE public.attachments
 -- to avoid unnecessary ACCESS EXCLUSIVE lock acquisition during deployment.
 DO $
 BEGIN
-  IF NOT EXISTS (
+/g  IF NOT EXISTS (
     SELECT 1
     FROM pg_trigger
     WHERE tgname = 'trg_profiles_updated_at'
@@ -1129,7 +1129,7 @@ ALTER TABLE public.attachments REPLICA IDENTITY FULL;
 -- Garante que todas as tabelas continuam na publicação de Realtime
 DO $$
 BEGIN
-  IF NOT pg_catalog.exists(SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
+  IF NOT EXISTS (SELECT 1 FROM pg_publication WHERE pubname = 'supabase_realtime') THEN
     CREATE PUBLICATION supabase_realtime;
   END IF;
 END;
@@ -1137,7 +1137,7 @@ $$;
 
 DO $
 BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'nodes') THEN
+/g  IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'nodes') THEN
     ALTER PUBLICATION supabase_realtime ADD TABLE public.nodes;
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'notes') THEN
