@@ -236,11 +236,24 @@ ALTER TABLE public.attachments
 -- 6. TRIGGERS DE ATUALIZAÇÃO AUTOMÁTICA DE updated_at
 -- ----------------------------------------------------------------------------
 
-DROP TRIGGER IF EXISTS trg_profiles_updated_at ON public.profiles;
-CREATE TRIGGER trg_profiles_updated_at
-  BEFORE UPDATE ON public.profiles
-  FOR EACH ROW
-  EXECUTE FUNCTION public.trigger_set_updated_at();
+-- Keep the function definition authoritative. The trigger is created only when absent
+-- to avoid unnecessary ACCESS EXCLUSIVE lock acquisition during deployment.
+DO $
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM pg_trigger
+    WHERE tgname = 'trg_profiles_updated_at'
+      AND tgrelid = 'public.profiles'::regclass
+      AND NOT tgisinternal
+  ) THEN
+    CREATE TRIGGER trg_profiles_updated_at
+      BEFORE UPDATE ON public.profiles
+      FOR EACH ROW
+      EXECUTE FUNCTION public.trigger_set_updated_at();
+  END IF;
+END;
+$;
 
 DROP TRIGGER IF EXISTS trg_nodes_updated_at ON public.nodes;
 CREATE TRIGGER trg_nodes_updated_at
