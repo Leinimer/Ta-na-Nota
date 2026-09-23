@@ -221,11 +221,11 @@ ALTER TABLE public.attachments
 
 ALTER TABLE public.attachments
   ADD CONSTRAINT chk_attachments_file_name_not_empty
-  CHECK (pg_catalog.length(pg_catalog.trim(file_name)) > 0);
+  CHECK (length(trim(file_name)) > 0);
 
 ALTER TABLE public.attachments
   ADD CONSTRAINT chk_attachments_mime_type_not_empty
-  CHECK (pg_catalog.length(pg_catalog.trim(mime_type)) > 0);
+  CHECK (length(trim(mime_type)) > 0);
 
 -- Garante que o caminho no storage pertence obrigatoriamente à pasta do próprio usuário
 ALTER TABLE public.attachments
