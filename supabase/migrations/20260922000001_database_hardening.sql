@@ -240,7 +240,7 @@ ALTER TABLE public.attachments
 -- to avoid unnecessary ACCESS EXCLUSIVE lock acquisition during deployment.
 DO $
 BEGIN
-/g  IF NOT EXISTS (
+IF NOT EXISTS (
     SELECT 1
     FROM pg_trigger
     WHERE tgname = 'trg_profiles_updated_at'
@@ -1137,7 +1137,7 @@ $$;
 
 DO $
 BEGIN
-/g  IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'nodes') THEN
+IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'nodes') THEN
     ALTER PUBLICATION supabase_realtime ADD TABLE public.nodes;
   END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_publication_tables WHERE pubname = 'supabase_realtime' AND schemaname = 'public' AND tablename = 'notes') THEN
