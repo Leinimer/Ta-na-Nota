@@ -314,7 +314,7 @@ export function NotesAssistant({ onDataChanged }: Props) {
               </button>
             </div>
             <p className="mt-1.5 text-center text-[10px] text-[#9A8B7D]">
-              A IA só acessa notas necessárias ao seu pedido.
+              O pedido e os trechos de notas necessários podem ser enviados à OpenAI API. Não envie conteúdo sigiloso sem autorização.
             </p>
           </form>
         </section>
