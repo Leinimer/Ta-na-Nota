@@ -182,7 +182,7 @@ export function NotesAssistant({ onDataChanged }: Props) {
             </div>
             <div className="min-w-0 flex-1">
               <div className="text-sm font-semibold">Assistente do Tá na nota</div>
-              <div className="text-[11px] text-[#8C7B6E]">Pesquisa e organização por linguagem natural</div>
+              <div className="text-[11px] text-[#8C7B6E]">OpenAI API · pesquisa e organização por linguagem natural</div>
             </div>
             <button
               type="button"
