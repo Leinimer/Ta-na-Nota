@@ -16,9 +16,10 @@ Esta implementação adiciona um assistente de linguagem natural ao próprio apl
 Configure estas variáveis no ambiente de hospedagem (por exemplo, Vercel):
 
 - \`OPENAI_API_KEY\`: chave secreta de um projeto da OpenAI Platform. Somente no servidor.
-- \`OPENAI_MODEL\`: opcional. Padrão atual: \`gpt-6-luna\`.
+- \`OPENAI_MODEL\`: opcional. Padrão atual: \`gpt-6-astra\`.
 - \`NEXT_PUBLIC_SUPABASE_URL\`: URL do projeto Supabase já utilizada pelo aplicativo.
 - \`NEXT_PUBLIC_SUPABASE_ANON_KEY\`: chave publicável/anon já utilizada pelo aplicativo.
+- \`AI_ASSISTANT_DAILY_LIMIT\`: opcional. Chamadas máximas por usuário por dia; padrão 50, máximo 500.
 
 Nunca coloque \`OPENAI_API_KEY\` em uma variável \`NEXT_PUBLIC_*\`, no navegador ou no GitHub. Não envie a chave por chat. Adicione-a diretamente nas variáveis de ambiente da Vercel e faça novo deploy.
 
