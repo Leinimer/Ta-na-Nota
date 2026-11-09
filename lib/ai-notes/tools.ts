@@ -345,12 +345,15 @@ export async function executeNoteTool(
         if (!parent) return fail("A pasta de destino não existe ou não pertence a esta conta.");
       }
 
-      const { data: siblings, error: siblingsError } = await supabase
+      let siblingsQuery = supabase
         .from("nodes")
         .select("position")
         .eq("user_id", userId)
-        .is("deleted_at", null)
-        .is("parent_id", parentId);
+        .is("deleted_at", null);
+      siblingsQuery = parentId
+        ? siblingsQuery.eq("parent_id", parentId)
+        : siblingsQuery.is("parent_id", null);
+      const { data: siblings, error: siblingsError } = await siblingsQuery;
       if (siblingsError) throw siblingsError;
       const position = (siblings || []).reduce((max: number, row: any) => Math.max(max, Number(row.position || 0)), 0) + 1000;
 
@@ -444,15 +447,20 @@ export async function executeNoteTool(
       if (!found) return fail("Não encontrei essa nota ou ela não está disponível para esta conta.");
 
       const updatedMarkdown = markdownWithTitle(String(found.note.markdown_content || ""), title);
-      const saved = await saveNoteContent(supabase, { ...found.node, name: title }, found.note, updatedMarkdown);
-      if (!saved.ok) return saved;
-
-      const { error: renameError } = await supabase
-        .from("nodes")
-        .update({ name: title, updated_at: new Date().toISOString() })
-        .eq("id", nodeId)
-        .eq("user_id", userId);
-      if (renameError) throw renameError;
+      const editorContent = MarkdownService.markdownToVisual(updatedMarkdown, title);
+      const { data, error } = await supabase.rpc("rename_note_atomic", {
+        p_node_id: nodeId,
+        p_new_title: title,
+        p_markdown_content: updatedMarkdown,
+        p_editor_content: editorContent,
+        p_version: Number(found.note.version || 1),
+        p_updated_at: found.note.updated_at || null,
+      });
+      if (error) throw error;
+      if (data?.status === "rejected_stale") {
+        return fail("A nota foi alterada em outro dispositivo. Atualize a nota e tente renomeá-la novamente.");
+      }
+      if (data?.status !== "updated") return fail("O banco não confirmou a alteração do título.");
 
       return {
         ok: true,
@@ -482,12 +490,15 @@ export async function executeNoteTool(
         if (!parent) return fail("A pasta de destino não existe ou não pertence a esta conta.");
       }
 
-      const { data: siblings, error: siblingsError } = await supabase
+      let siblingsQuery = supabase
         .from("nodes")
-        .select("position")
+        .select("id, position")
         .eq("user_id", userId)
-        .is("deleted_at", null)
-        .is("parent_id", parentId);
+        .is("deleted_at", null);
+      siblingsQuery = parentId
+        ? siblingsQuery.eq("parent_id", parentId)
+        : siblingsQuery.is("parent_id", null);
+      const { data: siblings, error: siblingsError } = await siblingsQuery;
       if (siblingsError) throw siblingsError;
       const position = (siblings || [])
         .filter((row: any) => row.id !== nodeId)
