@@ -85,6 +85,14 @@ export async function POST(request: Request) {
   try {
     const { supabase, user } = await getAuthenticatedSupabase(request);
 
+    const apiKey = process.env.OPENAI_API_KEY;
+    if (!apiKey) {
+      return NextResponse.json(
+        { error: "O assistente ainda não está configurado. Adicione OPENAI_API_KEY nas variáveis de ambiente da hospedagem." },
+        { status: 503 },
+      );
+    }
+
     const dailyLimit = Number.parseInt(process.env.AI_ASSISTANT_DAILY_LIMIT || "50", 10);
     const safeDailyLimit = Number.isFinite(dailyLimit) ? Math.min(500, Math.max(1, dailyLimit)) : 50;
     const { data: usage, error: usageError } = await supabase.rpc("consume_ai_assistant_request", {
@@ -96,14 +104,6 @@ export async function POST(request: Request) {
     }
     if (usage?.allowed !== true) {
       return NextResponse.json({ error: "Você atingiu o limite diário do assistente. Tente novamente amanhã ou ajuste AI_ASSISTANT_DAILY_LIMIT na hospedagem." }, { status: 429 });
-    }
-
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      return NextResponse.json(
-        { error: "O assistente ainda não está configurado. Adicione OPENAI_API_KEY nas variáveis de ambiente da hospedagem." },
-        { status: 503 },
-      );
     }
 
     const body = await request.json().catch(() => null);
