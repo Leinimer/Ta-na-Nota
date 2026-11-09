@@ -53,7 +53,7 @@ Não há exclusão de pastas nem substituição integral de conteúdo nesta prim
 - Cada chamada exige um JWT válido do Supabase. O ID do usuário é derivado da sessão validada, nunca do corpo enviado pelo navegador.
 - As consultas também filtram por \`user_id\`, além de dependerem do RLS.
 - O conteúdo de uma nota só é enviado à OpenAI quando o usuário pede para ler, resumir ou trabalhar com aquela nota. O assistente não envia toda a biblioteca de notas.
-- O conteúdo necessário para executar cada comando é enviado à OpenAI API para processamento; não é enviada a biblioteca inteira de notas. A OpenAI API é cobrada separadamente da assinatura ChatGPT. Configure limites de orçamento e alertas no projeto da OpenAI Platform.
+- O conteúdo necessário para executar cada comando é enviado à OpenAI API para processamento; não é enviada a biblioteca inteira de notas. Evite usar o assistente com dados pessoais ou informações sigilosas sem a autorização adequada. A OpenAI API é cobrada separadamente da assinatura ChatGPT. Configure limites de orçamento e alertas no projeto da OpenAI Platform.
 - Esta rota usa \`store: false\` na Responses API e mantém o histórico recente apenas no estado da interface durante a sessão. Isso evita criar uma conversa persistente da aplicação na API, mas não desativa os registros de monitoramento de abuso da plataforma.
 - Respostas de pesquisa na web podem conter fontes. O assistente deve citar essas fontes quando registrar informações atuais em uma nota.
 
