@@ -17,6 +17,7 @@ import { EditorErrorBoundary } from './editor/EditorErrorBoundary';
 import { CommandPalette } from './command-palette/CommandPalette';
 import { AuthModal } from './auth/AuthModal';
 import { AuthScreen } from './auth/AuthScreen';
+import { NotesAssistant } from './ai/NotesAssistant';
 import {
   Menu,
   FilePlus,
@@ -1015,6 +1016,45 @@ export function AppShell() {
     }
   };
 
+  // Atualiza a árvore e o cache offline depois de operações executadas pelo assistente.
+  const handleAssistantDataChanged = useCallback(async (nodeId?: string) => {
+    if (!currentUser?.id) return;
+    try {
+      await syncEngine.hydrateFromRemote(currentUser.id);
+    } catch (err) {
+      console.warn('[NotesAssistant] Falha ao hidratar alterações remotas:', err);
+    }
+
+    const refreshedTree = await nodeService.getTree(currentUser.id);
+    setTree(refreshedTree);
+
+    const activeId = nodeId || activeNodeRef.current?.id;
+    const findFirstNote = (nodes: TreeNode[]): TreeNode | null => {
+      for (const item of nodes) {
+        if (item.type === 'note' && !item.deletedAt) return item;
+        if (item.children?.length) {
+          const nested = findFirstNote(item.children);
+          if (nested) return nested;
+        }
+      }
+      return null;
+    };
+
+    const refreshedActive = activeId ? findNodeInTree(refreshedTree, activeId) : null;
+    if (refreshedActive?.type === 'note') {
+      await selectNode(refreshedActive);
+      return;
+    }
+
+    const firstNote = findFirstNote(refreshedTree);
+    if (firstNote) {
+      await selectNode(firstNote);
+    } else {
+      setActiveNode(null);
+      setActiveNote(null);
+    }
+  }, [currentUser?.id, selectNode]);
+
   // 1. Loading screen while checking existing session
   if (isCheckingAuth) {
     return (
@@ -1312,6 +1352,7 @@ export function AppShell() {
           </div>
         </div>
       )}
+      <NotesAssistant onDataChanged={handleAssistantDataChanged} />
     </div>
   );
 }
