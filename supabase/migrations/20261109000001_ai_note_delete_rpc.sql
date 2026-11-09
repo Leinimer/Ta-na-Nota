@@ -18,7 +18,7 @@ RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = ''
-AS $
+AS $$
 DECLARE
   v_user_id UUID;
   v_node_id UUID;
@@ -132,7 +132,7 @@ BEGIN
     'status', 'created'
   );
 END;
-$;
+$$;
 
 REVOKE ALL ON FUNCTION public.create_note_atomic(TEXT, UUID, TEXT, JSONB, UUID, UUID) FROM PUBLIC, anon;
 
@@ -147,7 +147,7 @@ RETURNS BOOLEAN
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = ''
-AS $
+AS $$
 DECLARE
   v_user_id UUID;
   v_cur_parent UUID;
@@ -221,7 +221,7 @@ BEGIN
 
   RETURN TRUE;
 END;
-$;
+$$;
 
 REVOKE ALL ON FUNCTION public.move_node_atomic(UUID, UUID, NUMERIC) FROM PUBLIC, anon;
 
@@ -241,7 +241,7 @@ RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = ''
-AS $
+AS $$
 DECLARE
   v_user_id UUID;
   v_existing public.notes%ROWTYPE;
@@ -369,7 +369,7 @@ BEGIN
     );
   END IF;
 END;
-$;
+$$;
 
 REVOKE ALL ON FUNCTION public.save_note_versioned(UUID, UUID, TEXT, JSONB, BOOLEAN, TIMESTAMPTZ, INTEGER, TIMESTAMPTZ) FROM PUBLIC, anon;
 
@@ -388,7 +388,7 @@ RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = ''
-AS $
+AS $$
 DECLARE
   v_user_id UUID;
   v_node public.nodes%ROWTYPE;
@@ -401,7 +401,7 @@ BEGIN
     RAISE EXCEPTION 'Not authenticated';
   END IF;
 
-  v_title := pg_catalog.btrim(pg_catalog.coalesce(p_new_title, ''));
+  v_title := pg_catalog.btrim(COALESCE(p_new_title, ''));
   IF v_title = '' OR pg_catalog.length(v_title) > 160 THEN
     RAISE EXCEPTION 'Invalid note title';
   END IF;
@@ -456,7 +456,7 @@ BEGIN
     'note', v_saved->'note'
   );
 END;
-$;
+$$;
 
 REVOKE ALL ON FUNCTION public.rename_note_atomic(UUID, TEXT, TEXT, JSONB, INTEGER, TIMESTAMPTZ) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.rename_note_atomic(UUID, TEXT, TEXT, JSONB, INTEGER, TIMESTAMPTZ) TO authenticated;
@@ -481,7 +481,7 @@ RETURNS JSONB
 LANGUAGE plpgsql
 SECURITY DEFINER
 SET search_path = ''
-AS $
+AS $$
 DECLARE
   v_user_id UUID;
   v_limit INTEGER;
@@ -525,7 +525,7 @@ BEGIN
     'remaining', GREATEST(0, v_limit - v_count)
   );
 END;
-$;
+$$;
 
 REVOKE ALL ON FUNCTION public.consume_ai_assistant_request(INTEGER) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.consume_ai_assistant_request(INTEGER) TO authenticated;
