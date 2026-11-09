@@ -24,11 +24,11 @@ Nunca coloque \`OPENAI_API_KEY\` em uma variável \`NEXT_PUBLIC_*\`, no navegado
 
 ## Migration necessária
 
-Antes de testar a exclusão assistida, execute o conteúdo de:
+Antes de testar a integração, execute o conteúdo de:
 
 \`supabase/migrations/20261109000001_ai_note_delete_rpc.sql\`
 
-no SQL Editor do projeto Supabase correto. A função exige usuário autenticado, limita a exclusão a notas próprias e rejeita pastas. Ela cria um tombstone no nó e remove o conteúdo da nota na mesma transação.
+no SQL Editor do projeto Supabase correto. A migration atualiza as RPCs transacionais necessárias para criação, gravação, movimentação e renomeação; adiciona a RPC de exclusão com confirmação, e cria um limitador diário de uso para controlar custos. A exclusão exige usuário autenticado, limita a operação a notas próprias e rejeita pastas. Ela cria um tombstone no nó e remove o conteúdo da nota na mesma transação.
 
 O restante das ferramentas reutiliza as RPCs existentes \`create_note_atomic\`, \`save_note_versioned\` e \`move_node_atomic\`.
 
@@ -52,7 +52,7 @@ Não há exclusão de pastas nem substituição integral de conteúdo nesta prim
 - Cada chamada exige um JWT válido do Supabase. O ID do usuário é derivado da sessão validada, nunca do corpo enviado pelo navegador.
 - As consultas também filtram por \`user_id\`, além de dependerem do RLS.
 - O conteúdo de uma nota só é enviado à OpenAI quando o usuário pede para ler, resumir ou trabalhar com aquela nota. O assistente não envia toda a biblioteca de notas.
-- A OpenAI API é cobrada separadamente da assinatura ChatGPT. Configure limites de orçamento e alertas no projeto da OpenAI Platform.
+- O conteúdo necessário para executar cada comando é enviado à OpenAI API para processamento; não é enviada a biblioteca inteira de notas. A OpenAI API é cobrada separadamente da assinatura ChatGPT. Configure limites de orçamento e alertas no projeto da OpenAI Platform.
 - Esta rota usa \`store: false\` na Responses API e mantém o histórico recente apenas no estado da interface durante a sessão. Isso evita criar uma conversa persistente da aplicação na API, mas não desativa os registros de monitoramento de abuso da plataforma.
 - Respostas de pesquisa na web podem conter fontes. O assistente deve citar essas fontes quando registrar informações atuais em uma nota.
 
